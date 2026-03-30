@@ -58,7 +58,7 @@ model = HydrostaticFreeSurfaceModel(
 using Oceananigans
 using Oceananigans.Architectures: architecture
 using Oceananigans.BoundaryConditions: fill_halo_regions!
-using Oceananigans.BuoyancyModels: ∂x_b, ∂y_b, ∂z_b
+using Oceananigans.BuoyancyFormulations: ∂x_b, ∂y_b, ∂z_b
 using Oceananigans.Grids: inactive_node, total_size
 using Oceananigans.Operators
 using Oceananigans.Operators: ℑxyᶠᶠᵃ, ℑxyᶜᶜᵃ, ℑxᶜᵃᵃ, ℑyᵃᶜᵃ, ∂zᶠᶜᶠ, ∂zᶜᶠᶠ

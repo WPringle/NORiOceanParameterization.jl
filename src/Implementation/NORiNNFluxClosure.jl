@@ -54,7 +54,7 @@ import Oceananigans.TurbulenceClosures:
         viscous_flux_wy,
         viscous_flux_wz
 
-using Oceananigans.BuoyancyModels: ∂x_b, ∂y_b, ∂z_b, g_Earth, top_buoyancy_flux
+using Oceananigans.BuoyancyFormulations: ∂x_b, ∂y_b, ∂z_b, g_Earth, top_buoyancy_flux
 using Oceananigans.Coriolis
 using Oceananigans.Grids: φnode, total_size
 using Oceananigans.Utils: KernelParameters, launch!
@@ -140,7 +140,7 @@ Construct a neural network flux closure for the given architecture.
 - `NORiNNFluxClosure` instance ready for use in Oceananigans
 """
 function NORiNNFluxClosure(arch; model_path=nothing)
-    dev = ifelse(arch == GPU(), gpu_device(), cpu_device())
+    dev = arch == GPU() ? gpu_device() : cpu_device()
 
     # Default model path - update this to use different trained models
     if isnothing(model_path)
@@ -184,14 +184,14 @@ function DiffusivityFields(grid, tracer_names, bcs, closure::NORiNNFluxClosure)
     last_index = Field((Center, Center, Nothing), grid, Int32)
 
     N_input = closure.wT.model.layers.layer_1.in_dims
-    N_levels = closure.grid_point_above + closure.grid_point_below
+    N_levels = grid.Nz   # NN active over full water column
 
     Nx_in, Ny_in, _ = size(wT)
     wrk_in = zeros(N_input, Nx_in, Ny_in, N_levels)
     wrk_in = on_architecture(arch, wrk_in)
 
-    wrk_wT = zeros(Nx_in, Ny_in, 15)
-    wrk_wS = zeros(Nx_in, Ny_in, 15)
+    wrk_wT = zeros(Nx_in, Ny_in, N_levels)
+    wrk_wS = zeros(Nx_in, Ny_in, N_levels)
     wrk_wT = on_architecture(arch, wrk_wT)
     wrk_wS = on_architecture(arch, wrk_wS)
 
@@ -236,10 +236,9 @@ function compute_diffusivities!(diffusivities, closure::NORiNNFluxClosure, model
     kp = KernelParameters((Nx_in, Ny_in, Nz_in), (ox_in, oy_in, oz_in))
     kp_2D = KernelParameters((Nx_in, Ny_in), (ox_in, oy_in))
 
-    N_levels = closure.grid_point_above + closure.grid_point_below
+    N_levels = grid.Nz   # NN active over full water column
 
     Nx_wrk, Ny_wrk, _ = size(wT)
-    # kp_wrk = KernelParameters((Nx_in, Ny_in, N_levels), (0, 0, 0))
     kp_wrk = KernelParameters((Nx_wrk, Ny_wrk, N_levels), (0, 0, 0))
 
     # Step 1: Find active region based on Ri threshold
@@ -415,7 +414,7 @@ identifying a well-mixed column.
     # If no mixed layer: set empty range (last < first)
     # Otherwise: extend region above and below background_κ_index
     @inbounds last_index[i, j, 1] = ifelse(no_mixed_layer, top_index - 1, clamp_k_interior(background_κ_index + grid_point_above_kappa, grid))
-    @inbounds first_index[i, j, 1] = ifelse(no_mixed_layer, top_index, clamp_k_interior(background_κ_index - grid_point_below_kappa + 1, grid))
+    @inbounds first_index[i, j, 1] = ifelse(no_mixed_layer, top_index, clamp_k_interior(2, grid))  # extend to bottom
 
 end
 
@@ -455,7 +454,7 @@ NN is only active when:
     quiescent = quiescent_condition(k_first, k_last)
     within_zone = within_zone_condition(k, k_first, k_last)
 
-    N_levels = closure.grid_point_above + closure.grid_point_below
+    N_levels = size(wrk_wT, 3)
     @inbounds k_wrk = clamp(k - k_first + 1, 1, N_levels)
 
     NN_active = convecting & !quiescent & within_zone
