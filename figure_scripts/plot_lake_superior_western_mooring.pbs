@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N plot_lake_superior_western_mooring
+#PBS -A SpaceCoast_RESCUE
+#PBS -q compute
+#PBS -l select=1:ncpus=1:mem=16gb
+#PBS -l walltime=0:30:00
+#PBS -o logs/plot_lake_superior_western_mooring.out
+#PBS -e logs/plot_lake_superior_western_mooring.err
+#PBS -j oe
+
+set -euo pipefail
+
+export PATH="$HOME/.juliaup/bin:$PATH"
+
+cd "$PBS_O_WORKDIR"
+
+mkdir -p logs
+
+echo "============================================"
+echo "Job ID       : $PBS_JOBID"
+echo "Node         : $(hostname)"
+echo "Start time   : $(date)"
+echo "Julia version: $(julia +1.10 --version)"
+echo "============================================"
+
+julia +1.10 --project=. figure_scripts/plot_lake_superior_western_mooring.jl
+
+echo "End time : $(date)"
+echo "Done."
