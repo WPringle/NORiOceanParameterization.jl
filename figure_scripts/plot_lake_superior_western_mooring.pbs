@@ -23,6 +23,8 @@ echo "Start time   : $(date)"
 echo "Julia version: $(julia +1.10 --version)"
 echo "============================================"
 
+julia +1.10 --project=. figure_scripts/process_lake_superior_observations.jl
+
 julia +1.10 --project=. figure_scripts/plot_lake_superior_western_mooring.jl
 
 echo "End time : $(date)"

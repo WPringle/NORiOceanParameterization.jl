@@ -34,7 +34,7 @@ SCRIPT="experiments/lake_superior_western_mooring_column_model.jl"
 PIDS=()
 for qt in 150 200 250; do
     for wind in U4ms U6ms U8ms; do
-        for closure in kepsilon CATKE NN; do
+        for closure in kepsilon CATKE NN kepsilon_Rist035 CATKE_highRi NN_highRi; do
             logfile="logs/lake_superior_${wind}_${closure}_QT${qt}.log"
             echo "Launching: $wind $closure QT=${qt} → $logfile"
             julia +1.10 --project=. --threads=1 "$SCRIPT" "$wind" "$closure" "$qt" \
@@ -56,7 +56,12 @@ if [[ $STATUS -ne 0 ]]; then
     echo "WARNING: one or more simulations exited with a non-zero status."
     exit $STATUS
 fi
-echo "All 27 simulations complete. Running plot script..."
+echo "All simulations complete. Processing observations..."
+
+julia +1.10 --project=. figure_scripts/process_lake_superior_observations.jl \
+    >> logs/lake_superior_western_mooring.out 2>&1
+
+echo "Running plot script..."
 
 julia +1.10 --project=. figure_scripts/plot_lake_superior_western_mooring.jl \
     >> logs/lake_superior_western_mooring.out 2>&1

@@ -4,6 +4,9 @@ using Oceananigans.TimeSteppers: update_state!
 using Oceananigans.TurbulenceClosures.TKEBasedVerticalDiffusivities:
     TKEDissipationVerticalDiffusivity, TKEDissipationEquations,
     CATKEVerticalDiffusivity, CATKEMixingLength, CATKEEquation
+using Oceananigans.Operators: ℑxᶜᵃᵃ, ℑyᵃᶜᵃ, ∂zᶠᶜᶠ, ∂zᶜᶠᶠ
+using Oceananigans.BuoyancyFormulations: ∂z_b
+using Oceananigans.AbstractOperations: KernelFunctionOperation
 using JLD2
 using Printf
 using SeawaterPolynomials
@@ -94,22 +97,53 @@ const wind_cases = [
 
 # ── Closure definitions ──────────────────────────────────────────────────────
 
-# k-ε with Cᵇϵ⁺ = 1.0, otherwise defaults
-function make_kepsilon()
-    tke_diss_eqs = TKEDissipationEquations(Cᵇϵ⁺ = 1.0)
+# k-ε with default parameters
+function make_kepsilon_default()
+    return TKEDissipationVerticalDiffusivity()
+end
+
+# k-ε with Cᵇϵ⁺ = Cᵇϵ⁻ = -0.26 → Riₛₜ ≈ 0.35
+function make_kepsilon_Rist035()
+    tke_diss_eqs = TKEDissipationEquations(Cᵇϵ⁺ = -0.26, Cᵇϵ⁻ = -0.26)
     return TKEDissipationVerticalDiffusivity(; tke_dissipation_equations = tke_diss_eqs)
 end
 
-# CATKE with default parameters
+# CATKE with default parameters (CRi⁰ = 0.25)
 function make_CATKE()
     mixing_length = CATKEMixingLength()
     tke_eq = CATKEEquation()
     return CATKEVerticalDiffusivity(; mixing_length, turbulent_kinetic_energy_equation = tke_eq)
 end
 
-# NORi NN closure (base + NN correction)
+# CATKE with CˡᵒD = 1.35 (default 1.604) → Riₛₜ ≈ 0.21 (from LES experiments in CATKE paper)
+function make_CATKE_highRi()
+    mixing_length = CATKEMixingLength()
+    tke_eq = CATKEEquation(CˡᵒD = 1.35)
+    return CATKEVerticalDiffusivity(; mixing_length, turbulent_kinetic_energy_equation = tke_eq)
+end
+
+# NORi NN closure with default Riᶜ (≈ 0.437, calibrated)
 function make_NN()
     return NORiClosureWithNN(arch = model_architecture)
+end
+
+# NORi NN closure with CATKE-like Ri profile:
+# constant mixing for 0 < Ri < 0.25, then linear decrease to background for 0.25 < Ri < 1.27
+function make_NN_highRi()
+    return NORiClosureWithNN(arch = model_architecture, Riˢʰ = 0.25, Riᶜ = 1.27)
+end
+
+# ── Richardson number diagnostic ─────────────────────────────────────────────
+# Ri = N² / S²  at (Center, Center, Face), consistent with NORi base closure.
+# Works for all turbulence closures.
+@inline ϕ²_Ri(i, j, k, grid, ϕ, args...) = ϕ(i, j, k, grid, args...)^2
+
+@inline function Ri_ccf(i, j, k, grid, u, v, buoyancy, tracers)
+    ∂z_u² = ℑxᶜᵃᵃ(i, j, k, grid, ϕ²_Ri, ∂zᶠᶜᶠ, u)
+    ∂z_v² = ℑyᵃᶜᵃ(i, j, k, grid, ϕ²_Ri, ∂zᶜᶠᶠ, v)
+    S²     = ∂z_u² + ∂z_v²
+    N²     = ∂z_b(i, j, k, grid, buoyancy, tracers)
+    return ifelse(N² == 0, zero(grid), N² / (S² + 1e-11))
 end
 
 # ── Model setup ──────────────────────────────────────────────────────────────
@@ -136,7 +170,7 @@ function setup_model(closure, Qᵁ, Q_mean, Q_amp)
         free_surface         = ImplicitFreeSurface(),
         momentum_advection   = WENO(grid = grid),
         tracer_advection     = WENO(grid = grid),
-        buoyancy             = SeawaterBuoyancy(equation_of_state = TEOS10.TEOS10EquationOfState()),
+        buoyancy             = SeawaterBuoyancy(equation_of_state = TEOS10.TEOS10EquationOfState(reference_density = ρ₀)),
         coriolis             = coriolis,
         closure              = closure,
         tracers              = tracers,
@@ -198,6 +232,12 @@ function run_simulation(model, Qᵁ, Q_mean, Q_amp, wind_label, closure_name, OU
     Tbar = Field(Average(T, dims = (1, 2)))
     Sbar = Field(Average(S, dims = (1, 2)))
 
+    # Richardson number profile
+    Ri_op  = KernelFunctionOperation{Center, Center, Face}(
+                 Ri_ccf, grid, model.velocities.u, model.velocities.v,
+                 model.buoyancy, model.tracers)
+    Ribar  = Field(Average(Ri_op, dims = (1, 2)))
+
     # ── L_MO timeseries ──────────────────────────────────────────────────────
     # L_MO = -|Qᵁ|^(3/2) / (κ · α(T_sfc) · g · Qᵀ)
     # α is updated each output step from the surface conservative temperature
@@ -210,9 +250,9 @@ function run_simulation(model, Qᵁ, Q_mean, Q_amp, wind_label, closure_name, OU
 
     function compute_L_MO(sim)
         t     = sim.model.clock.time
-        T_sfc = Array(interior(sim.model.tracers.T, 1, 1, Nz))[1]   # surface cell Θ [°C]
-        # α w.r.t. in-situ temperature at surface pressure (p = 0)
-        α_sfc = gsw_alpha_wrt_t_exact(S_lake, T_sfc, 0.0)
+        T_sfc = Array(interior(sim.model.tracers.T, 1, 1, Nz))[1]   # surface cell Θ (conservative T) [°C]
+        # α w.r.t. conservative temperature at surface pressure (p = 0), consistent with TEOS10 EOS
+        α_sfc = gsw_alpha(S_lake, T_sfc, 0.0)
         # Instantaneous kinematic heat flux at this time step
         Qᵀ_now = Qᵀ_diurnal(t, (; Q_mean, Q_amp))
         # L_MO = -|Qᵁ|^(3/2) / (κ · α · g · Qᵀ)
@@ -226,7 +266,7 @@ function run_simulation(model, Qᵁ, Q_mean, Q_amp, wind_label, closure_name, OU
 
     simulation.callbacks[:L_MO] = Callback(compute_L_MO, TimeInterval(1days))
 
-    averaged_outputs = (; ubar, vbar, Tbar, Sbar)
+    averaged_outputs = (; ubar, vbar, Tbar, Sbar, Ribar)
 
     mkpath(OUTPUT_PATH)
 
@@ -255,13 +295,16 @@ end
 
 # ── Experiment loop ───────────────────────────────────────────────────────────
 
-OUTPUT_PATH = joinpath(@__DIR__, "..", "figure_data", "lake_superior_western_mooring")
+OUTPUT_PATH = joinpath(@__DIR__, "..", "data", "lake_superior_western_mooring")
 
 # Closure name → factory function mapping
 closure_specs = [
-    ("kepsilon", make_kepsilon),
-    ("CATKE",    make_CATKE),
-    ("NN",       make_NN),
+    ("kepsilon",         make_kepsilon_default),
+    ("kepsilon_Rist035", make_kepsilon_Rist035),
+    ("CATKE",            make_CATKE),
+    ("CATKE_highRi",     make_CATKE_highRi),
+    ("NN",               make_NN),
+    ("NN_highRi",        make_NN_highRi),
 ]
 
 # Optional command-line arguments to run a single combination:
