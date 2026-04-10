@@ -115,10 +115,10 @@ function make_CATKE()
     return CATKEVerticalDiffusivity(; mixing_length, turbulent_kinetic_energy_equation = tke_eq)
 end
 
-# CATKE with CˡᵒD = 1.35 (default 1.604) → Riₛₜ ≈ 0.21 (from LES experiments in CATKE paper)
+# CATKE with Cˡᵒu = 0.52, Cˡᵒc = 0.64, Cʰⁱc = 0.115 → Riₛₜ ≈ 0.23, Γ⁰ ≈ 0.4, Γ∞ ≈ 0.2
 function make_CATKE_highRi()
-    mixing_length = CATKEMixingLength()
-    tke_eq = CATKEEquation(CˡᵒD = 1.35)
+    mixing_length = CATKEMixingLength(Cˡᵒu = 0.52, Cˡᵒc = 0.64, Cʰⁱc = 0.115)
+    tke_eq = CATKEEquation()
     return CATKEVerticalDiffusivity(; mixing_length, turbulent_kinetic_energy_equation = tke_eq)
 end
 

@@ -34,7 +34,7 @@ closures = [
 # Alternative (highRi) closures — used for alt T_profiles and Ri_profiles figures
 alt_closures = [
     ("kepsilon_Rist035", L"k-\varepsilon\;(Ri_{st}=0.35)", Makie.wong_colors()[6], :dash),
-    ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.21)",         Makie.wong_colors()[2], :dash),
+    ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2)", Makie.wong_colors()[2], :dash),
     ("NN_highRi",        L"NORi NN\;(Ri^{sh}=0.25,\;Ri_c=1.27)", :steelblue,      :dash),
 ]
 
@@ -43,7 +43,7 @@ closures_scaling = [
     ("kepsilon",         L"k-\varepsilon \; (Ri_{st}=0.25,\;C_{\varepsilon}^{b}=-0.65)", Makie.wong_colors()[6], :solid),
     ("kepsilon_Rist035", L"k-\varepsilon \; (Ri_{st}=0.35,\;C_{\varepsilon}^{b}=-0.26)",  Makie.wong_colors()[6], :dash),
     ("CATKE",            L"\mathrm{CATKE }\; (Ri_{st}=0.18,\;C_D^0=1.60)",  Makie.wong_colors()[2], :solid),
-    ("CATKE_highRi",     L"\mathrm{CATKE }\; (Ri_{st}=0.21,\;C_D^0=1.35)",  Makie.wong_colors()[2], :dash),
+    ("CATKE_highRi",     L"\mathrm{CATKE }\; (Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2)", Makie.wong_colors()[2], :dash),
     ("NN",               L"\mathrm{NORi NN }\; (Ri_c=0.44)",                             :steelblue, :solid),
     ("NN_highRi",        L"\mathrm{NORi NN }\; (Ri^{sh}=0.25,\;Ri_c=1.27)",            :steelblue, :dash),
 ]
@@ -880,7 +880,7 @@ with_theme(theme_latexfonts()) do
     # Alternative closure variants (highRi)
     alt_panel_specs = [
         ("kepsilon_Rist035", L"k-\varepsilon\;(Ri_{st}=0.35)",  Makie.wong_colors()[6]),
-        ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.21)",          Makie.wong_colors()[2]),
+        ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2)", Makie.wong_colors()[2]),
         ("NN_highRi",        L"NORi NN\;(Ri^{sh}=0.25,\;Ri_c=1.27)", :steelblue),
     ]
 
