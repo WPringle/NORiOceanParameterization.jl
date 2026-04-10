@@ -91,8 +91,10 @@ Richardson number-based vertical diffusivity closure.
 - `νᶜⁿ::FT`: Convective viscosity
 - `Pr_convₜ::FT`: Prandtl number for convective regime
 - `Pr_shearₜ::FT`: Prandtl number for shear regime
-- `Riᶜ::FT`: Critical Richardson number
-- `δRi::FT`: Richardson number transition scale
+- `Riᶜ::FT`: Critical Richardson number (Ri at which diffusivity reaches background ν₀)
+- `δRi::FT`: Richardson number transition scale (tanh width for convective regime)
+- `Riˢʰ::FT`: Shear-onset Richardson number; mixing is constant at νˢʰ for Ri ≤ Riˢʰ,
+              then decreases linearly to ν₀ over [Riˢʰ, Riᶜ]. Default 0 (linear from Ri=0).
 """
 struct NORiBaseVerticalDiffusivity{TD, FT} <: AbstractScalarDiffusivity{TD, VerticalFormulation, 2}
     ν₀        :: FT
@@ -102,6 +104,7 @@ struct NORiBaseVerticalDiffusivity{TD, FT} <: AbstractScalarDiffusivity{TD, Vert
     Pr_shearₜ :: FT
     Riᶜ       :: FT
     δRi       :: FT
+    Riˢʰ      :: FT   # Ri threshold below which mixing is constant at νˢʰ
 end
 
 """
@@ -125,6 +128,7 @@ Construct a NORi base vertical diffusivity closure.
 - `Pr_shearₜ`: Prandtl number for shear regime (default: 1.0842017486284887)
 - `Riᶜ`: Critical Richardson number (default: 0.4366901962987793)
 - `δRi`: Richardson number transition scale (default: 0.009695724988589002)
+- `Riˢʰ`: Shear-onset Ri; mixing constant at νˢʰ for Ri ≤ Riˢʰ, then linear down to ν₀ (default: 0.0)
 
 # Parameter File Format
 The JLD2 file should contain a key `"u"` with a ComponentArray containing:
@@ -164,7 +168,8 @@ function NORiBaseVerticalDiffusivity(time_discretization = VerticallyImplicitTim
                                      Pr_convₜ  = 0.1749433627329692,
                                      Pr_shearₜ = 1.0842017486284887,
                                      Riᶜ       = 0.4366901962987793,
-                                     δRi       = 0.009695724988589002)
+                                     δRi       = 0.009695724988589002,
+                                     Riˢʰ      = 0.0)
 
     TD = typeof(time_discretization)
 
@@ -206,7 +211,8 @@ function NORiBaseVerticalDiffusivity(time_discretization = VerticallyImplicitTim
         convert(FT, params.Pr_convₜ),
         convert(FT, params.Pr_shearₜ),
         convert(FT, params.Riᶜ),
-        convert(FT, params.δRi)
+        convert(FT, params.δRi),
+        convert(FT, Riˢʰ)          # always from kwargs; not a calibrated parameter
     )
 end
 
@@ -214,7 +220,7 @@ NORiBaseVerticalDiffusivity(FT::DataType; kw...) =
     NORiBaseVerticalDiffusivity(VerticallyImplicitTimeDiscretization(), FT; kw...)
 
 Adapt.adapt_structure(to, clo::NORiBaseVerticalDiffusivity{TD, FT}) where {TD, FT} =
-    NORiBaseVerticalDiffusivity{TD, FT}(clo.ν₀, clo.νˢʰ, clo.νᶜⁿ, clo.Pr_convₜ, clo.Pr_shearₜ, clo.Riᶜ, clo.δRi)
+    NORiBaseVerticalDiffusivity{TD, FT}(clo.ν₀, clo.νˢʰ, clo.νᶜⁿ, clo.Pr_convₜ, clo.Pr_shearₜ, clo.Riᶜ, clo.δRi, clo.Riˢʰ)
 
 #####
 ##### Diffusivity field utilities
@@ -360,7 +366,8 @@ Compute local diffusivities at grid point (i, j, k).
 
 # Physics
 - **Convective (Ri < 0)**: ν = (νˢʰ - νᶜⁿ) * tanh(Ri/δRi) + νˢʰ
-- **Stable (Ri > 0)**: ν = (ν₀ - νˢʰ) * Ri/Riᶜ + νˢʰ, clamped to [ν₀, νˢʰ]
+- **Stable, flat region (0 ≤ Ri ≤ Riˢʰ)**: ν = νˢʰ (constant; Riˢʰ = 0 means no flat region)
+- **Stable, transition (Riˢʰ < Ri ≤ Riᶜ)**: ν = (ν₀ - νˢʰ) * (Ri - Riˢʰ)/(Riᶜ - Riˢʰ) + νˢʰ, clamped to [ν₀, νˢʰ]
 - Diffusivities computed from viscosities using Prandtl numbers
 - Boundary values (k=1 and k=Nz+1) set to zero
 """
@@ -376,6 +383,7 @@ Compute local diffusivities at grid point (i, j, k).
     Pr_shearₜ = closure_ij.Pr_shearₜ
     Riᶜ       = closure_ij.Riᶜ
     δRi       = closure_ij.δRi
+    Riˢʰ      = closure_ij.Riˢʰ
 
     # Compute diffusivities from viscosities using Prandtl numbers
     κ₀  = ν₀ / Pr_shearₜ
@@ -394,9 +402,12 @@ Compute local diffusivities at grid point (i, j, k).
         ν_local = (νˢʰ - νᶜⁿ) * tanh(Ri / δRi) + νˢʰ
         κ_local = (κˢʰ - κᶜⁿ) * tanh(Ri / δRi) + κˢʰ
     else
-        # Stable regime: linear interpolation, clamped
-        ν_local = clamp((ν₀ - νˢʰ) * Ri / Riᶜ + νˢʰ, ν₀, νˢʰ)
-        κ_local = clamp((κ₀ - κˢʰ) * Ri / Riᶜ + κˢʰ, κ₀, κˢʰ)
+        # Stable regime: constant νˢʰ for Ri ≤ Riˢʰ, then linear down to ν₀ over [Riˢʰ, Riᶜ].
+        # With Riˢʰ = 0 this reduces to the original linear-from-zero formula.
+        Ri_shifted = max(Ri - Riˢʰ, zero(Ri))
+        dRi        = Riᶜ - Riˢʰ
+        ν_local    = clamp((ν₀ - νˢʰ) * Ri_shifted / dRi + νˢʰ, ν₀, νˢʰ)
+        κ_local    = clamp((κ₀ - κˢʰ) * Ri_shifted / dRi + κˢʰ, κ₀, κˢʰ)
     end
 
     # Set boundary values to zero
@@ -428,5 +439,6 @@ function Base.show(io::IO, closure::NBVD)
               "├── Pr_convₜ: ", prettysummary(closure.Pr_convₜ), '\n',
               "├── Pr_shearₜ: ", prettysummary(closure.Pr_shearₜ), '\n',
               "├── Riᶜ: ", prettysummary(closure.Riᶜ), '\n',
-              "└── δRi: ", prettysummary(closure.δRi))
+              "├── δRi: ", prettysummary(closure.δRi), '\n',
+              "└── Riˢʰ: ", prettysummary(closure.Riˢʰ))
 end
