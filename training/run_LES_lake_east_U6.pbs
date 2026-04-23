@@ -1,0 +1,53 @@
+#!/bin/bash
+#PBS -N LES_lake_east_U6
+#PBS -A SAFS
+#PBS -l select=1
+#PBS -l walltime=12:00:00
+#PBS -l filesystems=home:grand
+#PBS -q preemptable
+#PBS -o logs/LES_lake_east_U6.out
+#PBS -e logs/LES_lake_east_U6.err
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy settings for any package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+# Julia setup
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/grand/projects/gpu_hack/wpringle/NORiOceanParameterization.jl
+
+# Let CUDA.jl use its own artifact-based runtime
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+# Output directory
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output
+mkdir -p ${OUTPUT_DIR}
+
+# Instantiate project dependencies once before launching experiments
+${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+
+SCRIPT=${PROJECT_DIR}/training/run_LES_lake_superior_gpu.jl
+COMMON_ARGS="--Lz 212 --stop_time 30 --file_location ${OUTPUT_DIR}"
+
+#####
+##### Eastern mooring (Lz=212m), U=6 m/s, 3 cooling rates (one per GPU)
+#####
+
+CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 6 --Q_mean 150 ${COMMON_ARGS} \
+    > logs/LES_lake_east_U6_QT150.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 6 --Q_mean 250 ${COMMON_ARGS} \
+    > logs/LES_lake_east_U6_QT250.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 6 --Q_mean 350 ${COMMON_ARGS} \
+    > logs/LES_lake_east_U6_QT350.log 2>&1 &
+
+echo "Eastern mooring U=6 m/s: 3 experiments launched, waiting..."
+wait
+echo "All experiments finished."

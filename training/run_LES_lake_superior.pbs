@@ -1,0 +1,62 @@
+#!/bin/bash
+#PBS -N LES_lake_superior
+#PBS -A SAFS
+#PBS -l select=1
+#PBS -l walltime=01:00:00
+#PBS -l filesystems=home:grand
+#PBS -q debug
+#PBS -o logs/LES_lake_superior.out
+#PBS -e logs/LES_lake_superior.err
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy settings for any package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+# Julia setup
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/grand/projects/gpu_hack/wpringle/NORiOceanParameterization.jl
+
+# Let CUDA.jl use its own artifact-based runtime (don't load Polaris shared env
+# which forces local CUDA discovery that may fail on compute nodes)
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+# Output directory
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output
+mkdir -p ${OUTPUT_DIR}
+
+# Instantiate project dependencies once before launching experiments
+${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+
+SCRIPT=${PROJECT_DIR}/training/run_LES_lake_superior_gpu.jl
+COMMON_ARGS="--stop_time 36 --file_location ${OUTPUT_DIR}"
+
+#####
+##### Launch 4 Lake Superior LES experiments in parallel (one per GPU)
+#####
+
+# Experiment 0: U=6 m/s, Q_mean=200 W/m² (baseline)
+CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 6 --Q_mean 200 ${COMMON_ARGS} \
+    > logs/LES_lake_U6_QT200.log 2>&1 &
+
+# Experiment 1: U=6 m/s, Q_mean=300 W/m² (stronger cooling)
+CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 6 --Q_mean 300 ${COMMON_ARGS} \
+    > logs/LES_lake_U6_QT300.log 2>&1 &
+
+# Experiment 2: U=10 m/s, Q_mean=200 W/m² (stronger wind)
+CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 10 --Q_mean 200 ${COMMON_ARGS} \
+    > logs/LES_lake_U10_QT200.log 2>&1 &
+
+# Experiment 3: U=10 m/s, Q_mean=300 W/m² (strong wind + strong cooling)
+CUDA_VISIBLE_DEVICES=3 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    --U_wind 10 --Q_mean 300 ${COMMON_ARGS} \
+    > logs/LES_lake_U10_QT300.log 2>&1 &
+
+echo "All 4 Lake Superior experiments launched, waiting for completion..."
+wait
+echo "All experiments finished."
