@@ -56,29 +56,10 @@ docs/Manifest.toml
 # MacOS stuff
 *.DS_Store
 
-# VSCode
-.vscode
-
-# AMGX
-.logamgx
-
-statprof
-*.sqlite
-*.nsys-rep
-
 # Custom folders
-/Data
-/batch_scripts
+/data
 /logs
-/ARGO
-/figure_data*
-
-# Additional file types
-*.sh
-*.slurm
-*.pptx
-*.txt
-*.csv
+/figure_data
 
 !calibrated_parameters/*
 !media/*
