@@ -1,0 +1,71 @@
+#!/bin/bash
+#PBS -N lake_superior_eastern_mooring_GLEN_forced
+#PBS -A HSOFS_Ensemble
+#PBS -q compute
+#PBS -l select=1:ncpus=128
+#PBS -l walltime=1:00:00
+#PBS -o logs/TURB_eastern_mooring_GLEN_forced.out
+#PBS -e logs/TURB_eastern_mooring_GLEN_forced.err
+#PBS -j oe
+
+set -euo pipefail
+
+# ── Environment ───────────────────────────────────────────────────────────────
+export PATH="$HOME/.juliaup/bin:$PATH"
+
+cd "$PBS_O_WORKDIR"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+mkdir -p logs
+
+echo "============================================"
+echo "Job ID       : $PBS_JOBID"
+echo "Job name     : $PBS_JOBNAME"
+echo "Submit dir   : $PBS_O_WORKDIR"
+echo "Node         : $(hostname)"
+echo "Start time   : $(date)"
+echo "Julia version: $(julia +1.10 --version)"
+echo "============================================"
+
+# ── Run simulations in parallel, throttled to MAX_JOBS at a time ───────────────
+# Each Julia/Oceananigans process needs ~2.5 GB RAM.  Launching all combinations
+# at once (e.g. 5 years × 4 closures × 2 sources = 40) overcommits the node's
+# memory, which makes JLD2's memory-mapped writes fail with SIGBUS (bus error)
+# and corrupt output files.  Cap concurrency so peak RAM stays well under 128 GB.
+SCRIPT="experiments/lake_superior_eastern_mooring_GLEN_forced.jl"
+MAX_JOBS=32    # verified safe (8 × ~2.5 GB ≈ 20 GB peak); raise cautiously vs 128 GB node
+
+# Forcing source(s): "direct" (measured EC fluxes) and/or "coare_wind"
+# (momentum/SHF/LHF re-derived from wind via the COARE bulk algorithm).
+STATUS=0
+#for year in 2009 2010 2011 2014 2015; do
+for year in 2015; do
+#for year in 2009 2010 2011 2014; do
+    for closure in kepsilon kepsilon_Rist035 CATKE CATKE_highRi; do
+    #for closure in kepsilon; do
+        for source in direct coare_wind; do
+        #for source in direct; do
+            # Throttle: wait for a slot to free up before launching the next job.
+            while (( $(jobs -rp | wc -l) >= MAX_JOBS )); do
+                wait -n || STATUS=$?
+            done
+            logfile="logs/eastern_mooring_GLEN_forced_winter${year}_${closure}_${source}.log"
+            echo "Launching: winter=${year} closure=${closure} source=${source} → $logfile"
+            julia +1.10 --project=. --threads=1 "$SCRIPT" "$year" "$closure" "$source" \
+                > "$logfile" 2>&1 &
+        done
+    done
+done
+
+# Wait for the remaining background jobs and collect exit codes
+while (( $(jobs -rp | wc -l) > 0 )); do
+    wait -n || STATUS=$?
+done
+
+echo "============================================"
+echo "End time : $(date)"
+if [[ $STATUS -ne 0 ]]; then
+    echo "WARNING: one or more simulations exited with a non-zero status."
+    exit $STATUS
+fi
+echo "All simulations complete."
