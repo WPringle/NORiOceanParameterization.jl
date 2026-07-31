@@ -8,7 +8,7 @@ using GibbsSeaWater
 ##### Configuration
 #####
 
-DATA_DIR   = joinpath(@__DIR__, "..", "figure_data", "lake_superior_western_mooring")
+DATA_DIR   = joinpath(@__DIR__, "..", "data", "lake_superior_western_mooring")
 FIGURE_DIR = joinpath(@__DIR__, "..", "figures")
 mkpath(FIGURE_DIR)
 
@@ -34,7 +34,7 @@ closures = [
 # Alternative (highRi) closures — used for alt T_profiles and Ri_profiles figures
 alt_closures = [
     ("kepsilon_Rist035", L"k-\varepsilon\;(Ri_{st}=0.35)", Makie.wong_colors()[6], :dash),
-    ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2)", Makie.wong_colors()[2], :dash),
+    ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2,\;C^S=1.56)", Makie.wong_colors()[2], :dash),
     ("NN_highRi",        L"NORi NN\;(Ri^{sh}=0.25,\;Ri_c=1.27)", :steelblue,      :dash),
 ]
 
@@ -880,7 +880,7 @@ with_theme(theme_latexfonts()) do
     # Alternative closure variants (highRi)
     alt_panel_specs = [
         ("kepsilon_Rist035", L"k-\varepsilon\;(Ri_{st}=0.35)",  Makie.wong_colors()[6]),
-        ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2)", Makie.wong_colors()[2]),
+        ("CATKE_highRi",     L"CATKE\;(Ri_{st}=0.23,\;\Gamma^0=0.4,\;\Gamma^\infty=0.2,\;C^S=1.56)", Makie.wong_colors()[2]),
         ("NN_highRi",        L"NORi NN\;(Ri^{sh}=0.25,\;Ri_c=1.27)", :steelblue),
     ]
 
