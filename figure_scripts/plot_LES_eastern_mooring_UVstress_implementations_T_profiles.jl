@@ -1,32 +1,35 @@
 #####
-##### GLEN-forced Eastern Mooring — TURB k-ε temperature profiles (wind stress × EOS)
+##### GLEN-forced Eastern Mooring — LES UVstress implementation comparison (T only)
 #####
-# Rows = winter year, columns = day 15 / 30 / 45 snapshots. Every panel overlays
-# three k-ε variants against the observed temperature profile (T only):
-#   • UVstress                          — directional wind stress; TEOS-10 EOS         (full model)  (blue,   solid)
-#   • UVstress_EOSteos10cabbeling       — directional wind stress; full TEOS-10 with Z    (simplified)  (green,  dotted)
-#                                          clamped to 0 (exact cabbeling curve, no thermobaricity)
-#   • UVstress_EOScabbelingthermobaric  — directional wind stress; Cabbeling-Thermobaric EOS (simplified) (purple, dash-dot)
+# Rows = winter year, columns = day 30 / 45 / 60 snapshots. Every panel overlays
+# three LES implementations, all with the same UV-decomposed (directional) wind
+# stress, against the observed temperature profile (T only):
+#   • UVstress                       — default LES (WENO(order=9) advection,      (full model)  (blue,   solid)
+#                                        no explicit subgrid closure)
+#   • WENO5_UVstress                 — lower-order (5th) WENO advection            (simplified)  (orange, dashed)
+#   • SmagorinskyLilly_UVstress      — explicit Smagorinsky–Lilly subgrid closure  (simplified)  (green,  dotted)
+# The full 3-way comparison is only available for FORCING_SOURCE=coare_wind for
+# most winters (2009, 2010, 2011, 2014) — direct mostly only has the default
+# implementation, and 2015/coare_wind is missing SmagorinskyLilly; missing runs
+# are skipped with a warning rather than filling the panel.
 # The shared initial (day 0) profile is drawn once per panel as a grey dashed line,
-# and the observed profile (day 15 / 30 / 45) is overlaid in its matching column.
+# and the observed profile (day 30 / 45 / 60) is overlaid in its matching column.
 # Each panel is annotated with the mean forcing (Q̄_h, Q̄_U) over the window leading
-# up to its snapshot day: 0–15 days, 15–30 days, or 30–45 days, plus the
-# dimensionless surface mixing parameter M_sfc(τ) — a time-weighted average of the
-# instantaneous forcing ratio, cumulative from the simulation start (τ = 0) through
-# the snapshot day, that up-weights more recent forcing (see the Msfc section below).
+# up to its snapshot day: 0–30 days, 30–45 days, or 45–60 days.
 #
-# Inputs  : data/TURB_outputs/eastern_mooring_GLEN_forced/winter<YEAR>/
-#               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling|_EOScabbelingthermobaric]_winter<YEAR>.jld2  (Tbar)
+# Inputs  : data/LES_outputs/eastern_mooring_GLEN/
+#               LES_GLEN_winter<YEAR>_<forcing>[_WENO5|_SmagorinskyLilly]_UVstress_
+#                   Lxy256_Lz212_Nxy128_Nz106/hourly_averaged_timeseries.jld2  (Tbar)
 #           figure_data/lake_superior_eastern_mooring/
 #               lake_superior_eastern_mooring_winter_start_dates.csv  (isothermal dates)
 #               observed_mld.jld2                                     (obs)
 #           /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
 #               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc  (forcing)
-# Outputs : figures/TURB_eastern_mooring_wind_EOS_T_profiles_{direct,coare_wind}.pdf
+# Outputs : figures/LES_eastern_mooring_UVstress_implementations_T_profiles_{direct,coare_wind}.pdf
 #
 # Usage:
-#   julia plot_TURB_eastern_mooring_wind_EOS_T_profiles.jl               # direct (default)
-#   julia plot_TURB_eastern_mooring_wind_EOS_T_profiles.jl coare_wind
+#   julia plot_LES_eastern_mooring_UVstress_implementations_T_profiles.jl               # direct (default)
+#   julia plot_LES_eastern_mooring_UVstress_implementations_T_profiles.jl coare_wind     # full 3-way comparison
 #####
 
 using Oceananigans
@@ -52,27 +55,8 @@ end
 const S_lake    = 0.05
 const ρ₀        = 999.8
 const g_grav    = 9.80665
-const cₚ        = 4182.0   # J/(kg·K) — freshwater specific heat (matches experiment)
 const albedo_sw = 0.08     # broadband shortwave albedo (matches experiment)
 const ε_water   = 0.98     # longwave emissivity of water (matches experiment)
-
-# In-situ temperature of maximum density at the surface (p = 0 dbar), in Kelvin, for M_sfc below.
-const T_MD = gsw_t_from_ct(S_lake, gsw_ct_maxdensity(S_lake, 0.0), 0.0) + 273.15   # K
-
-# Instantaneous surface mixing "rate" m(t) = |Q_U|^(3/2) T_MD / (g Q_T H) — dimensionless.
-# Q_U is signed in this codebase (kinematic momentum flux), so |Q_U| is used to
-# keep the fractional power real. Q_T here is the *kinematic* heat flux (K·m/s);
-# Q_h is the reported heat flux in W/m², so Q_T = Q_h / (ρ₀ cₚ).
-m_rate(Qh_Wm2, QU, H) = abs(QU)^1.5 * T_MD / (g_grav * (Qh_Wm2 / (ρ₀ * cₚ)) * H)
-
-# Surface mixing parameter, evaluated cumulatively from the start of the simulation
-# (t = 0) up to time τ via a time-weighted average that up-weights more recent
-# forcing — since |α| grows as the surface cools further below T_MD, forcing late
-# in the record matters more than forcing right at the start:
-#   M_sfc(τ) = (1/τ²) ∫₀^τ ∫_t^τ m(t') dt' dt = (1/τ²) ∫₀^τ t' m(t') dt'   (swap order)
-# Discretized on calendar days (see cumulative_Msfc below), for the same reason
-# Q_h/Q_U are daily-averaged before applying m(): Q_h crosses zero often enough at
-# half-hourly resolution that evaluating m(t) on individual samples blows up.
 
 # Forcing source: "direct" (measured EC fluxes) or "coare_wind".
 const FORCING_SOURCE = length(ARGS) >= 1 ? ARGS[1] : "direct"
@@ -80,13 +64,15 @@ FORCING_SOURCE ∈ ("direct", "coare_wind") ||
     error("FORCING_SOURCE must be \"direct\" or \"coare_wind\", got \"$(FORCING_SOURCE)\"")
 const SRC_TAG = FORCING_SOURCE == "direct" ? "" : "_coare_wind"   # JLD2 flux suffix
 
-const TURB_DIR = joinpath(@__DIR__, "..", "data", "TURB_outputs", "eastern_mooring_GLEN_forced")
+const LES_DIR  = joinpath(@__DIR__, "..", "data", "LES_outputs", "eastern_mooring_GLEN")
+const LES_STEM = "Lxy256_Lz212_Nxy128_Nz106"
 FIGURE_DIR     = joinpath(@__DIR__, "..", "figures")
 mkpath(FIGURE_DIR)
 
-# k-ε output file for a given winter, UV-stress tag, and EOS tag.
-turb_file(year, uv_tag, eos_tag) = joinpath(TURB_DIR, "winter$(year)",
-    "kepsilon$(SRC_TAG)$(uv_tag)$(eos_tag)_winter$(year).jld2")
+# LES output file for a given winter and implementation tag ("" = default, "_WENO5", "_SmagorinskyLilly").
+les_file(year, impl_tag) = joinpath(LES_DIR,
+    "LES_GLEN_winter$(year)_$(FORCING_SOURCE)$(impl_tag)_UVstress_$(LES_STEM)",
+    "hourly_averaged_timeseries.jld2")
 
 # ── GLEN forcing file + isothermal (winter start) dates ───────────────────────
 const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
@@ -113,7 +99,7 @@ end
 
 # Forcing time series (W/m², m²/s²) over [t_iso, t_iso + ndays], read directly from
 # the gap-filled GLEN NetCDF and reduced exactly as the experiment does.
-function load_glen_forcing(year; ndays = 45)
+function load_glen_forcing(year; ndays = 60)
     t_iso = read_isothermal_date(CSV_FILE, year)
     (isnothing(t_iso) || !isfile(GLEN_FILE)) && return nothing
     return NCDataset(GLEN_FILE) do ds
@@ -141,9 +127,9 @@ obs_em = if isfile(OBS_EM_FILE)
     jldopen(OBS_EM_FILE) do f
         (wys     = Int.(f["winter_years"]),
          dep_raw = f["dep_raw_obs"],
-         T15_raw = f["T15_raw_obs"],
          T1_raw  = f["T1_raw_obs"],   # day-30 observed profile
-         T45_raw = f["T45_raw_obs"])
+         T45_raw = f["T45_raw_obs"],
+         T2_raw  = f["T2_raw_obs"])  # day-60 observed profile
     end
 else
     @warn "EM obs not found ($OBS_EM_FILE) — run process_lake_superior_southern_eastern_moorings.jl first"
@@ -151,30 +137,30 @@ else
 end
 
 # Observed raw profile (per year) for each column's snapshot day.
-obs_profile_for_day(day) = day == 15 ? obs_em.T15_raw :
-                            day == 30 ? obs_em.T1_raw  :
-                            day == 45 ? obs_em.T45_raw : nothing
+obs_profile_for_day(day) = day == 30 ? obs_em.T1_raw  :
+                            day == 45 ? obs_em.T45_raw :
+                            day == 60 ? obs_em.T2_raw  : nothing
 
 winter_years = [2009, 2010, 2011, 2014, 2015]
 
 #####
-##### Load data — the three k-ε variants (UVstress is the full/complete model)
+##### Load data — the three LES implementations (default UVstress is the full model)
 #####
 const VARIANTS = [
-    (uv_tag = "_UVstress", eos_tag = "",                          color = :steelblue4, label = "Directional wind stress; TEOS-10 EOS", linestyle = :solid),
-    (uv_tag = "_UVstress", eos_tag = "_EOSteos10cabbeling",        color = :seagreen,   label = "No thermobaricity",                    linestyle = :dot),
-    (uv_tag = "_UVstress", eos_tag = "_EOScabbelingthermobaric",   color = :purple,     label = "Cabbeling-Thermobaric EOS",            linestyle = :dashdot),
+    (impl_tag = "",                   color = :steelblue4, label = "LES (default: WENO9, no closure)", linestyle = :solid),
+    (impl_tag = "_WENO5",             color = :darkorange, label = "LES (WENO5)",                       linestyle = :dash),
+    (impl_tag = "_SmagorinskyLilly",  color = :seagreen,   label = "LES (Smagorinsky-Lilly)",           linestyle = :dot),
 ]
 
 variant_data = [Dict{Int, Dict{String, Any}}() for _ in VARIANTS]
 for (vi, v) in enumerate(VARIANTS)
     for year in winter_years
-        f = turb_file(year, v.uv_tag, v.eos_tag)
+        f = les_file(year, v.impl_tag)
         isfile(f) || (@warn "Missing: $f"; continue)
         variant_data[vi][year] = Dict("Tbar" => FieldTimeSeries(f, "Tbar"))
     end
 end
-all(isempty, variant_data) && error("No k-ε TURB outputs found for FORCING_SOURCE=$(FORCING_SOURCE)")
+all(isempty, variant_data) && error("No LES outputs found for FORCING_SOURCE=$(FORCING_SOURCE)")
 
 # ── Grid geometry (from the first available run) ──────────────────────────────
 ref = let r = nothing
@@ -213,7 +199,7 @@ p_dbar = [ρ₀ * g_grav * abs(z) / 1e4 for z in zC]
 panel_profile(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu)
 
 # First variant (in VARIANTS order) that has data for this winter — used for the
-# shared initial-condition profile, which is common to all three variants.
+# shared initial-condition profile, which is common to all three implementations.
 function reference_variant(year)
     for vd in variant_data
         haskey(vd, year) && return vd[year]
@@ -224,9 +210,9 @@ end
 #####
 ##### Column configuration — target days, not variables
 #####
-const columns     = [(day = 15, label = "Day 15"), (day = 30, label = "Day 30"), (day = 45, label = "Day 45")]
+const columns     = [(day = 30, label = "Day 30"), (day = 45, label = "Day 45"), (day = 60, label = "Day 60")]
 const T_XLIMS     = (0.0, 5.0)
-const WINDOW_EDGES = (0, 15, 30, 45)   # column i covers (WINDOW_EDGES[i], WINDOW_EDGES[i+1]] days
+const WINDOW_EDGES = (0, 30, 45, 60)   # column i covers (WINDOW_EDGES[i], WINDOW_EDGES[i+1]] days
 
 # ── Mean forcing per column window, from gap-filled GLEN NetCDF + T_sfc (LW_up) ──
 mean_forcing = Dict{Int, Vector{NamedTuple}}()
@@ -237,7 +223,7 @@ for year in winter_years
 
     if isnothing(forcing) || isnothing(Tbar_fts)
         @warn "No GLEN forcing for winter $year (missing date or NetCDF)"
-        mean_forcing[year] = [(Qh_Wm2 = NaN, QU_m2s2 = NaN, Msfc = NaN) for _ in 1:(length(WINDOW_EDGES) - 1)]
+        mean_forcing[year] = [(Qh_Wm2 = NaN, QU_m2s2 = NaN) for _ in 1:(length(WINDOW_EDGES) - 1)]
         continue
     end
 
@@ -271,30 +257,11 @@ for year in winter_years
         return (Qh, QU)
     end
 
-    # M_sfc(τ) = (1/τ²) Σᵢ tᵢ m(Qh_i, QU_i, H) · Δt, tᵢ = day midpoint, Δt = 1 day —
-    # the discretized (1/τ²) ∫₀^τ t' m(t') dt', with m() evaluated on daily-mean
-    # Qh/QU (not half-hourly samples) to avoid the Qh-crosses-zero blow-up.
-    function cumulative_Msfc(τ, H)
-        total, any_valid = 0.0, false
-        for d in 1:τ
-            Qh_d, QU_d = window_means(d - 1, d)
-            (isnan(Qh_d) || isnan(QU_d)) && continue
-            m_d = m_rate(Qh_d, QU_d, H)
-            isnan(m_d) && continue
-            total     += (d - 0.5) * m_d
-            any_valid  = true
-        end
-        any_valid || return NaN
-        return total / τ^2
-    end
-
     window_data = NamedTuple[]
     for i in 1:(length(WINDOW_EDGES) - 1)
         lo, hi = WINDOW_EDGES[i], WINDOW_EDGES[i+1]
         Qh, QU = window_means(lo, hi)
-        # M_sfc(τ) is cumulative from the simulation start (τ = hi), independent of
-        # the Q̄_h/Q̄_U window it's annotated alongside.
-        push!(window_data, (Qh_Wm2 = Qh, QU_m2s2 = QU, Msfc = cumulative_Msfc(hi, Lz_EM)))
+        push!(window_data, (Qh_Wm2 = Qh, QU_m2s2 = QU))
     end
     mean_forcing[year] = window_data
 end
@@ -302,7 +269,7 @@ end
 #####
 ##### Plotting: rows = winter year, columns = day snapshot
 #####
-function plot_TURB_T_profiles(filename)
+function plot_LES_T_profiles(filename)
     Nyears = length(winter_years)
     Ncols  = length(columns)
 
@@ -342,7 +309,7 @@ function plot_TURB_T_profiles(filename)
                 lines!(ax, panel_profile(dk_ref, 0), zC;
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
 
-                # Each of the three k-ε variants at this day.
+                # Each of the three LES implementations at this day.
                 for (vi, v) in enumerate(VARIANTS)
                     haskey(variant_data[vi], year) || continue
                     dk = variant_data[vi][year]
@@ -354,15 +321,10 @@ function plot_TURB_T_profiles(filename)
                 ylims!(ax, (-Lz_EM - 5, 5))
                 xlims!(ax, T_XLIMS)
 
-                # M_sfc(τ = column day, cumulative from t=0) / Q̄_h / Q̄_U (window leading up to this column's day).
+                # Q̄_h / Q̄_U annotation for the window leading up to this column's day.
                 mf = get(mean_forcing, year, nothing)
                 if !isnothing(mf) && !isnan(mf[col].Qh_Wm2)
                     f = mf[col]
-                    if !isnan(f.Msfc)
-                        text!(ax, 0.03, 0.19;
-                              text  = latexstring("M_{\\mathrm{sfc}} = ", sci_latex(f.Msfc)),
-                              space = :relative, align = (:left, :bottom), fontsize = 8)
-                    end
                     text!(ax, 0.03, 0.11;
                           text  = latexstring("\\bar{Q}_h = ", round(Int, f.Qh_Wm2), "\\;\\mathrm{W\\,m^{-2}}"),
                           space = :relative, align = (:left, :bottom), fontsize = 8)
@@ -416,7 +378,7 @@ function plot_TURB_T_profiles(filename)
                framevisible = false, padding = (0, 0, 0, 0), nbanks = 2)
 
         Label(fig[0, 1:Ncols],
-              "Eastern Mooring — TURB k-ε temperature, GLEN-forced ($(FORCING_SOURCE))";
+              "Eastern Mooring — LES UVstress implementations, GLEN-forced ($(FORCING_SOURCE))";
               fontsize = 11, font = :bold, justification = :center)
 
         colgap!(fig.layout, 10)
@@ -431,4 +393,4 @@ end
 #####
 ##### Generate figure
 #####
-plot_TURB_T_profiles("TURB_eastern_mooring_wind_EOS_T_profiles_$(FORCING_SOURCE).pdf")
+plot_LES_T_profiles("LES_eastern_mooring_UVstress_implementations_T_profiles_$(FORCING_SOURCE).pdf")
