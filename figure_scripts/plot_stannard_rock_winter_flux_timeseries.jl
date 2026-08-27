@@ -5,17 +5,14 @@
 #   wind speed, wind direction, momentum flux, sensible heat flux, latent heat flux
 # from the Stannard Rock GLEN netCDF. The three flux panels overlay both the
 # "direct" (measured eddy-covariance) and "coare_wind" (COARE bulk algorithm
-# driven by wind speed) estimates. Vertical dotted lines mark the isothermal
-# winter-start dates of the Eastern mooring (2009, 2010, 2011, 2014, 2015) and,
-# where they exist, the Southern mooring (2010, 2011 only). One figure per
-# winter season.
+# driven by wind speed) estimates. A vertical dotted line marks the isothermal
+# winter-start date of the Eastern mooring (2009, 2010, 2011, 2014, 2015).
+# One figure per winter season.
 #
 # Inputs  : /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
 #               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc
 #           figure_data/lake_superior_eastern_mooring/
 #               lake_superior_eastern_mooring_winter_start_dates.csv
-#           figure_data/lake_superior_southern_mooring/
-#               lake_superior_southern_mooring_winter_start_dates.csv
 # Outputs : figures/stannard_rock_winter_flux_timeseries_winter<YEAR>.pdf
 #####
 
@@ -30,9 +27,6 @@ const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
 const CSV_EASTERN  = joinpath(@__DIR__, "..", "figure_data",
                                "lake_superior_eastern_mooring",
                                "lake_superior_eastern_mooring_winter_start_dates.csv")
-const CSV_SOUTHERN = joinpath(@__DIR__, "..", "figure_data",
-                               "lake_superior_southern_mooring",
-                               "lake_superior_southern_mooring_winter_start_dates.csv")
 
 const FIGURE_DIR = joinpath(@__DIR__, "..", "figures")
 mkpath(FIGURE_DIR)
@@ -61,25 +55,26 @@ function read_isothermal_dates(csv_file)
 end
 
 const eastern_iso  = read_isothermal_dates(CSV_EASTERN)
-const southern_iso = read_isothermal_dates(CSV_SOUTHERN)
 
 # ── Load Stannard Rock data (once) ─────────────────────────────────────────────
-glen_times, wspd, wdir, mom, mom_c, shf, shf_c, lhf, lhf_c = NCDataset(GLEN_FILE) do ds
+glen_times, wspd, wdir, mom, mom_c, shf, shf_c, lhf, lhf_c, tair = NCDataset(GLEN_FILE) do ds
     times = DateTime.(ds["time"][:])
     getv(name) = Float64[ismissing(x) ? NaN : Float64(x) for x in ds[name][:]]
     (times,
      getv("wind_speed"), getv("wind_direction"),
      getv("momentum_flux"),      getv("momentum_flux_coare_wind"),
      getv("sensible_heat_flux"), getv("sensible_heat_flux_coare_wind"),
-     getv("latent_heat_flux"),   getv("latent_heat_flux_coare_wind"))
+     getv("latent_heat_flux"),   getv("latent_heat_flux_coare_wind"),
+     getv("air_temperature") .- 273.15)   # source is Kelvin (original_variable_name = TMPK)
 end
 @info "Loaded Stannard Rock: $(glen_times[1]) to $(glen_times[end]) ($(length(glen_times)) records)"
 
 # ── Panel definitions ──────────────────────────────────────────────────────────
 # (label, ylabel, direct series, coare_wind series or `nothing`)
 panels = [
-    ("Wind speed",       L"U \; (\mathrm{m\,s^{-1}})",   wspd, nothing),
-    ("Wind direction",   L"\theta \; (^\circ)",          wdir, nothing),
+    ("Wind speed",       L"U_{39} \; (\mathrm{m\,s^{-1}})",   wspd, nothing),
+    ("Wind direction",   "wind direction (from)",        wdir, nothing),
+    ("Air temperature",  L"T_{\mathrm{air}} \; (^\circ\mathrm{C})", tair, nothing),
     ("Momentum flux",    L"\tau \; (\mathrm{N\,m^{-2}})", mom,  mom_c),
     ("Sensible heat flux", L"SHF \; (\mathrm{W\,m^{-2}})", shf,  shf_c),
     ("Latent heat flux",   L"LHF \; (\mathrm{W\,m^{-2}})", lhf,  lhf_c),
@@ -98,18 +93,18 @@ function plot_winter_season(year)
     idx = findall(t -> t0 <= t <= t1, glen_times)
     t_days = [to_days(t, t0) for t in glen_times[idx]]
 
-    fig = Figure(size = (900, 900), fontsize = 11, figure_padding = (8, 12, 6, 6))
+    fig = Figure(size = (520, 120 * Nvar + 30), fontsize = 11, figure_padding = (8, 12, 6, 6))
 
     month_starts = [DateTime(year - 1, 12, 1), DateTime(year, 1, 1),
                     DateTime(year, 2, 1),      DateTime(year, 3, 1)]
-    month_labels = ["Dec 1", "Jan 1", "Feb 1", "Mar 1"]
+    month_labels = ["Dec 1, $(year - 1)", "Jan 1", "Feb 1", "Mar 1, $(year)"]
     xtick_pos = [to_days(t, t0) for t in month_starts]
 
     axes = Axis[]
     for (row, (label, ylabel, direct, coare)) in enumerate(panels)
         ax = CairoMakie.Axis(fig[row, 1];
                  ylabel             = ylabel,
-                 xlabel             = row == Nvar ? "Date" : "",
+                 xlabel             = "",
                  xticks             = (xtick_pos, month_labels),
                  xticklabelsvisible = row == Nvar,
                  title              = row == 1 ? "Winter $(year)" : "")
@@ -119,9 +114,9 @@ function plot_winter_season(year)
         if label == "Wind direction"
             valid = .!isnan.(d_direct)
             scatter!(ax, t_days[valid], d_direct[valid];
-                     color = (DIRECT_COLOR, 0.4), markersize = 2)
+                     color = (DIRECT_COLOR, 0.7), markersize = 4)
             ylims!(ax, (0, 360))
-            ax.yticks = ([0, 90, 180, 270, 360], ["0", "90", "180", "270", "360"])
+            ax.yticks = ([0, 90, 180, 270, 360], ["N", "E", "S", "W", "N"])
         else
             lines!(ax, t_days, d_direct; color = DIRECT_COLOR, linewidth = 1.0)
             if !isnothing(coare)
@@ -137,12 +132,6 @@ function plot_winter_season(year)
                     color = :black, linewidth = 1.4, linestyle = :dot)
         end
 
-        # Southern mooring isothermal date (only exists for 2010, 2011)
-        if haskey(southern_iso, year)
-            vlines!(ax, [to_days(southern_iso[year], t0)];
-                    color = :darkorange, linewidth = 1.4, linestyle = :dot)
-        end
-
         xlims!(ax, (to_days(t0, t0), to_days(t1, t0)))
     end
     linkxaxes!(axes...)
@@ -153,14 +142,10 @@ function plot_winter_season(year)
         LineElement(color = (COARE_COLOR, 0.8), linewidth = 1.5, linestyle = :dash),
         LineElement(color = :black, linewidth = 1.4, linestyle = :dot),
     ]
-    legend_labels = ["Direct (EC)", "COARE (wind-driven)", "Eastern iso. date"]
-    if haskey(southern_iso, year)
-        push!(legend_elems, LineElement(color = :darkorange, linewidth = 1.4, linestyle = :dot))
-        push!(legend_labels, "Southern iso. date")
-    end
+    legend_labels = ["Direct Measurement", "COARE algorithm", "Eastern Mooring iso. date"]
     Legend(fig[Nvar + 1, 1], legend_elems, legend_labels;
-           orientation = :horizontal, tellwidth = false, labelsize = 9,
-           framevisible = false, padding = (0, 0, 0, 0))
+           orientation = :horizontal, tellwidth = false, labelsize = 11,
+           framevisible = false, padding = (0, 0, 0, 0), nbanks = 1)
 
     rowgap!(fig.layout, 6)
 

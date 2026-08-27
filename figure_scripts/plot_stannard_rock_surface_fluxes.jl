@@ -1,18 +1,17 @@
 #####
 ##### Stannard Rock surface flux timeseries during fall transition periods.
 #####
-# For each winter season identified in the Southern and Eastern mooring analysis,
+# For each winter season identified in the Eastern mooring analysis,
 # the fall transition window is defined as:
 #   [isothermal 4°C date  →  isothermal date + 60 days]
 # The script plots latent heat flux, sensible heat flux, downwelling shortwave,
 # downwelling longwave, and wind speed from the Stannard Rock GLEN netCDF file.
 # One figure panel row per season; columns = flux variables.
 #
-# Inputs  : figure_data/lake_superior_{southern,eastern}_mooring/observed_mld.jld2
+# Inputs  : figure_data/lake_superior_eastern_mooring/observed_mld.jld2
 #           /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
 #               US_StannardRockSuperior_processed_halfhourly_qc.nc
-# Outputs : figures/stannard_rock_fluxes_southern_mooring_winters.pdf
-#           figures/stannard_rock_fluxes_eastern_mooring_winters.pdf
+# Outputs : figures/stannard_rock_fluxes_eastern_mooring_winters.pdf
 #####
 
 using NCDatasets
@@ -177,19 +176,16 @@ function plot_flux_figure(winter_years, start_dates_str, fig_stem, mooring_name)
     @info "Saved → $outfig"
 end
 
-# ── Load mooring results and make figures ──────────────────────────────────────
-for (jld2_subdir, mooring_name, fig_stem) in [
-        ("lake_superior_southern_mooring", "Southern Mooring", "southern_mooring"),
-        ("lake_superior_eastern_mooring",  "Eastern Mooring",  "eastern_mooring"),
-    ]
+# ── Load mooring results and make figure ────────────────────────────────────────
+let (jld2_subdir, mooring_name, fig_stem) = ("lake_superior_eastern_mooring", "Eastern Mooring", "eastern_mooring")
     jld2_file = joinpath(@__DIR__, "..", "figure_data", jld2_subdir, "observed_mld.jld2")
     if !isfile(jld2_file)
         @warn "JLD2 not found: $jld2_file — run process_lake_superior_southern_eastern_moorings.jl first"
-        continue
+    else
+        wys, sdates = jldopen(jld2_file) do f
+            f["winter_years"], f["start_dates"]
+        end
+        @info "$(mooring_name): $(length(wys)) winter seasons: $wys"
+        plot_flux_figure(wys, sdates, fig_stem, mooring_name)
     end
-    wys, sdates = jldopen(jld2_file) do f
-        f["winter_years"], f["start_dates"]
-    end
-    @info "$(mooring_name): $(length(wys)) winter seasons: $wys"
-    plot_flux_figure(wys, sdates, fig_stem, mooring_name)
 end
