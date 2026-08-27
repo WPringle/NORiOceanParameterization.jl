@@ -53,6 +53,7 @@ using Oceananigans.Operators: ℑxᶜᵃᵃ, ℑyᵃᶜᵃ, ∂zᶠᶜᶠ, ∂z�
 using Oceananigans.BuoyancyFormulations: ∂z_b
 using Oceananigans.AbstractOperations: KernelFunctionOperation
 using JLD2
+using MAT
 using NCDatasets
 using Dates
 using Statistics
@@ -95,9 +96,16 @@ const SRC_TAG = FORCING_SOURCE == "direct" ? "" : "_coare_wind"    # filename ta
 @info "Forcing source = $FORCING_SOURCE"
 
 # ── CSV: look up isothermal (start) date ──────────────────────────────────────
+# Uses the EASTERN Mooring's isothermal dates (not the Southern Mooring's own —
+# see process_lake_superior_southern_eastern_moorings.jl / the Tbot-timeseries
+# analysis: the Southern Mooring's much deeper column rarely reaches a clean
+# whole-column isothermal state, so this run instead starts at the same wall-
+# clock time as the Eastern Mooring runs, using the Southern Mooring's own
+# *observed* — generally still-stratified — profile as the initial condition
+# (see Θ_conservative below) rather than assuming uniform 4 °C.
 const CSV_FILE = joinpath(@__DIR__, "..", "figure_data",
-    "lake_superior_southern_mooring",
-    "lake_superior_southern_mooring_winter_start_dates.csv")
+    "lake_superior_eastern_mooring",
+    "lake_superior_eastern_mooring_winter_start_dates.csv")
 
 function read_isothermal_date(csv_file, year)
     return open(csv_file) do f
@@ -125,7 +133,6 @@ const cₚ      = 4182.0     # J/(kg·K) — freshwater specific heat
 const ρ_air   = 1.225      # kg/m³  (used to convert momentum flux ↔ u*)
 const g_conv   = 9.80665   # m/s²
 const S_lake   = 0.05      # g/kg (Absolute Salinity, constant)
-const T_insitu = 4.0       # °C  (initial in-situ temperature)
 
 # Radiation constants for net SW and LW
 const albedo_sw = 0.08     # broadband shortwave albedo of fresh water surface
@@ -280,10 +287,84 @@ const lat = 47.0 + 2.0 / 60.0    # 47° 2.0' N (southern mooring)
 const Ω   = 7.2921150e-5         # rad/s
 const f₀  = 2 * Ω * sind(lat)
 
-# ── Initial temperature (uniform 4 °C, converted to Conservative Temperature) ─
+# ── Initial temperature: observed Southern Mooring profile ────────────────────
+# t_iso above is now the Eastern Mooring's isothermal date, at which the
+# (much deeper) Southern Mooring column is generally still stratified — so the
+# initial condition here is built directly from the Southern Mooring's own
+# observed sensor profile at that time (natural cubic spline in depth, with
+# *constant* extrapolation above the shallowest and below the deepest sensor,
+# rather than a polynomial blow-up outside the sensor range).
+const OBS_DIR = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/Austin2023"
+t2dt_obs(t::Real) = DateTime(2000, 1, 1) + Millisecond(round(Int64, (t - 730486.0) * 86_400_000.0))
+
+function natural_cubic_spline(x::Vector{Float64}, y::Vector{Float64})
+    n = length(x)
+    h = diff(x)
+    a = zeros(n); b = ones(n); c = zeros(n); d = zeros(n)
+    for i in 2:n-1
+        a[i] = h[i-1]
+        b[i] = 2 * (h[i-1] + h[i])
+        c[i] = h[i]
+        d[i] = 6 * ((y[i+1] - y[i]) / h[i] - (y[i] - y[i-1]) / h[i-1])
+    end
+    for i in 2:n-1   # Thomas algorithm (natural boundary: M[1] = M[n] = 0)
+        w = a[i] / b[i-1]
+        b[i] -= w * c[i-1]
+        d[i] -= w * d[i-1]
+    end
+    M = zeros(n)
+    for i in (n-1):-1:2
+        M[i] = (d[i] - c[i] * M[i+1]) / b[i]
+    end
+    return function (xq::Float64)
+        xq <= x[1]   && return y[1]      # constant extrapolation above shallowest sensor
+        xq >= x[end] && return y[end]    # constant extrapolation below deepest sensor
+        i  = searchsortedlast(x, xq)
+        hi = h[i]
+        A  = (x[i+1] - xq) / hi
+        B  = (xq - x[i]) / hi
+        return A * y[i] + B * y[i+1] + ((A^3 - A) * M[i] + (B^3 - B) * M[i+1]) * hi^2 / 6
+    end
+end
+
+# Find the Austin2023 SM*.mat file spanning t_target and build a depth → in-situ
+# temperature spline from the sensor readings at (the nearest available time to) it.
+function observed_profile_spline(t_target)
+    for f in sort(readdir(OBS_DIR; join = true))
+        isdir(f) || continue
+        for fn in sort(readdir(f))
+            (startswith(fn, "SM") && endswith(fn, ".mat")) || continue
+            path = joinpath(f, fn)
+            data = try matread(path) catch; continue end
+            haskey(data, "dep") || continue
+            t_raw = vec(Float64.(reshape(data["t"], :)))
+            dts   = t2dt_obs.(t_raw)
+            (dts[1] <= t_target <= dts[end]) || continue
+
+            dep   = vec(Float64.(reshape(data["dep"], :)))
+            T_raw = data["T"]
+            Ndep, Nt = length(dep), length(t_raw)
+            T = size(T_raw) == (Ndep, Nt) ? Float64.(T_raw) : Float64.(T_raw')
+
+            i = findfirst(==(t_target), dts)
+            isnothing(i) && ((_, i) = findmin(abs.(Dates.value.(dts .- t_target))))
+            col = T[:, i]
+            any(isnan, col) && error("Observed Southern Mooring profile at $(dts[i]) in $fn has NaNs")
+
+            idx = sortperm(dep)
+            @info "Southern Mooring IC: observed profile from $fn at $(dts[i])"
+            return natural_cubic_spline(dep[idx], col[idx])
+        end
+    end
+    error("No Southern Mooring raw .mat file found spanning t_target = $t_target")
+end
+
+const T_obs_spline = observed_profile_spline(t_iso)
+
 function Θ_conservative(z::Float64)
-    p_dbar = ρ₀ * g_conv * abs(z) / 1e4
-    return gsw_ct_from_t(S_lake, T_insitu, p_dbar)
+    p_dbar     = ρ₀ * g_conv * abs(z) / 1e4
+    T_insitu_z = T_obs_spline(abs(z))
+    return gsw_ct_from_t(S_lake, T_insitu_z, p_dbar)
 end
 
 # ── Closure definitions ───────────────────────────────────────────────────────

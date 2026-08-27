@@ -198,6 +198,7 @@ const CABBELING_THERMOBARIC_POLY = SecondOrderSeawaterPolynomial{Float64}(
 # approximated by a reduced Roquet polynomial as CABBELING_POLY does above.
 struct SurfaceTEOS10SeawaterPolynomial{FT} <: AbstractSeawaterPolynomial end
 SurfaceTEOS10SeawaterPolynomial(FT=Float64) = SurfaceTEOS10SeawaterPolynomial{FT}()
+Base.eltype(::SurfaceTEOS10SeawaterPolynomial{FT}) where FT = FT
 with_float_type(FT, ::SurfaceTEOS10SeawaterPolynomial) = SurfaceTEOS10SeawaterPolynomial{FT}()
 
 const SurfaceTEOS10EOS = SeawaterPolynomials.BoussinesqEquationOfState{<:SurfaceTEOS10SeawaterPolynomial}
