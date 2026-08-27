@@ -26,6 +26,20 @@ mkpath(FIGURE_DIR)
 # MATLAB datenum: days since Jan 0, year 0; datenum(2000,1,1) = 730486
 t2dt(t::Real) = DateTime(2000, 1, 1) + Millisecond(round(Int64, (t - 730486.0) * 86_400_000.0))
 
+# SMS09h.mat (Southern Mooring, winter 2010) records every one of its 15 sensor
+# depths a uniform ~18 m deeper than the equivalent sensor in the following
+# year's deployment (SMS10h.mat), including a deepest sensor at 396 m versus a
+# recorded site water depth of only 380 m. The data producer suspects the
+# deepest value is a typo (should read ~375 m, i.e. 5 m off the bottom), but
+# since the offset is uniform across the whole chain rather than isolated to
+# one sensor, we shift every depth in this one file up by 20 m (rather than
+# just correcting the last entry) — deepest sensor becomes 376 m. Revert this
+# once the data producer confirms/corrects the source file.
+function apply_known_depth_corrections!(dep, filepath)
+    basename(filepath) == "SMS09h.mat" && (dep .-= 20.0)
+    return dep
+end
+
 # ── MLD from observed profile ──────────────────────────────────────────────────
 const ΔT_mld = 0.1   # °C threshold
 
@@ -78,7 +92,7 @@ function process_mat(filepath, dep_common; T4_tol = 0.05, start_override = nothi
         haskey(data, v) || return nothing
     end
 
-    dep   = vec(Float64.(reshape(data["dep"], :)))
+    dep   = apply_known_depth_corrections!(vec(Float64.(reshape(data["dep"], :))), filepath)
     t_raw = vec(Float64.(reshape(data["t"],   :)))
     T_raw = data["T"]
 
@@ -245,7 +259,8 @@ function collect_results(prefix; T4_tol = 0.05, start_override = nothing)
     for f in mat_files
         data = try matread(f) catch; continue end
         haskey(data, "dep") || continue
-        max_depth = max(max_depth, maximum(vec(Float64.(reshape(data["dep"], :)))))
+        dep = apply_known_depth_corrections!(vec(Float64.(reshape(data["dep"], :))), f)
+        max_depth = max(max_depth, maximum(dep))
     end
     dep_common = make_dep_common(max_depth)
     @info "$(prefix): max observed depth = $(max_depth) m → $(length(dep_common))-level common grid (bottom = $(dep_common[end]) m)"

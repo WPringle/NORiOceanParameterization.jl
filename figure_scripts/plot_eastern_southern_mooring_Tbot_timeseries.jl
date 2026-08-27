@@ -1,15 +1,24 @@
 #####
 ##### GLEN-forced Lake Superior Moorings — bottom temperature T_bot(t) time series
 #####
-# 2 x 3 grid: the 4 Eastern Mooring winters with bottom-temperature observations
-# (2009, 2011, 2014, 2015 — 2010's EM deployment never reached the lake bottom,
-# see process_lake_superior_southern_eastern_moorings.jl) plus the 2 Southern
-# Mooring winters (2010, 2011 — the only two with a TURB run). Each panel overlays:
+# 2 x 4 grid (legend in the last slot), matching both the panel arrangement and
+# year/mooring list of plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl:
+# row 1 is the Eastern Mooring winters 2009/2010/2011/2014; row 2 is Eastern
+# Mooring winter 2015, then the 2 Southern Mooring winters (2010, 2011 — the only
+# two with a TURB run), then the legend. Note that EM winter 2010's deployment
+# never reached the true lake bottom (its deepest sensor is well short of the
+# model's 212 m column) — see process_lake_superior_southern_eastern_moorings.jl
+# and the per-panel recorded site water depth Z values @info-logged near the
+# bottom of this script (for adding to the figure caption), since Z varies by
+# deployment/year/site. Each panel's xlabel spells out its own calendar
+# isothermal-start date ("Days since 2008-12-16") rather than a generic "Days
+# since start", since that date differs by site/year (see the EM-vs-SM
+# Q̄_h/Q̄_U discussion earlier in this conversation). Each panel overlays:
 #   • LES        — bottom-cell Tbar, UVstress                              (black)
 #                   (Eastern Mooring only; no LES has been run for the Southern
 #                   Mooring site, so those two panels omit this line)
 #   • k-ε        — bottom-cell Tbar, UVstress + TEOS-10 EOS (the default)  (blue)
-#   • Simple model (dashed, purple) — a diagnostic argument for T_bot, evaluated
+#   • Analytical model (dashed, purple) — a diagnostic argument for T_bot, evaluated
 #     hourly (not daily) directly from the raw GLEN forcing, with both the
 #     Monin–Obukhov length L_MO *and* the upwelling-longwave correction in Q_T
 #     built from the *observed* surface temperature rather than the model's
@@ -25,9 +34,13 @@
 #     strong enough to reach the bottom). Ordinary cooling while above T_MD
 #     (also L_MO < 0, but with Q_T > 0) is deliberately left to the L_MO > H
 #     pathway instead. Otherwise T_bot is left unchanged that hour:
-#       T_bot(t) = T_start - (1/H) ∫₀ᵗ Q_T(t') 𝟙[mixed to bottom](t') dt'
-#     with Q_T the kinematic heat flux (K·m/s), H the site's water depth, and
-#     T_start = 4 °C the isothermal winter-start bottom temperature (not T_MD).
+#       T_bot(t) = T_bot(0) - (1/H) ∫₀ᵗ Q_T(t') 𝟙[mixed to bottom](t') dt'
+#     with Q_T the kinematic heat flux (K·m/s); H the deployment's own recorded
+#     water depth Z (not the model grid's Lz — falls back to Lz only if Z is
+#     unavailable; see the per-panel Z/Lz comparison @info-logged below); and
+#     T_bot(0) the *observed* bottom temperature at t = 0 (not a fixed 4 °C —
+#     actual starting values vary by site/year, e.g. SM 2010/2011 start at
+#     3.94/3.83 °C; falls back to 4 °C only if no observation is available).
 #   • Observations — continuous hourly record at the deepest sensor           (red)
 #
 # Inputs  : data/TURB_outputs/{eastern,southern}_mooring_GLEN_forced/winter<YEAR>/
@@ -66,9 +79,12 @@ const cₚ        = 4182.0  # J/(kg·K) — freshwater specific heat (matches ex
 const albedo_sw = 0.08
 const ε_water   = 0.98
 
-# Simple model's initial bottom temperature — the isothermal winter-start state
-# (matches the ~4 °C isothermal criterion used to pick t_iso itself), not T_MD.
-const T_START = 4.0
+# Analytical model's fallback initial bottom temperature, used only if no
+# observed T_bot(0) is available to start from (see simple_Tbot_model below) —
+# the nominal ~4 °C isothermal criterion used to pick t_iso itself, not T_MD.
+# Actual observed starting values vary by site/year and can differ meaningfully
+# from 4 °C (e.g. SM winter 2010 starts at 3.94 °C, SM winter 2011 at 3.83 °C).
+const T_START_FALLBACK = 4.0
 
 # Forcing source: "direct" (measured EC fluxes) or "coare_wind".
 const FORCING_SOURCE = length(ARGS) >= 1 ? ARGS[1] : "direct"
@@ -92,25 +108,35 @@ struct MooringSite
     obs_prefix :: String    # "EM" or "SM" — Austin2023 raw .mat filename prefix
 end
 
+const EM_CSV_FILE = joinpath(@__DIR__, "..", "figure_data", "lake_superior_eastern_mooring",
+                              "lake_superior_eastern_mooring_winter_start_dates.csv")
+
 const EM_SITE = MooringSite(
     "Eastern",
     joinpath(@__DIR__, "..", "data", "TURB_outputs", "eastern_mooring_GLEN_forced"),
     joinpath(@__DIR__, "..", "data", "LES_outputs", "eastern_mooring_GLEN"),
-    joinpath(@__DIR__, "..", "figure_data", "lake_superior_eastern_mooring",
-             "lake_superior_eastern_mooring_winter_start_dates.csv"),
+    EM_CSV_FILE,
     "EM")
 
+# The southern mooring experiment script now also reads t_iso from the eastern
+# mooring's isothermal-date CSV rather than its own (SM runs are re-initialized
+# to start at the same calendar date as the EM runs) — see the equivalent note
+# in plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl — so this
+# site definition points at EM_CSV_FILE too, not its own
+# lake_superior_southern_mooring_winter_start_dates.csv.
 const SM_SITE = MooringSite(
     "Southern",
     joinpath(@__DIR__, "..", "data", "TURB_outputs", "southern_mooring_GLEN_forced"),
     nothing,
-    joinpath(@__DIR__, "..", "figure_data", "lake_superior_southern_mooring",
-             "lake_superior_southern_mooring_winter_start_dates.csv"),
+    EM_CSV_FILE,
     "SM")
 
-# (site, year) panel list — 2 x 3 grid, row-major.
-const PANELS = [(site = EM_SITE, year = 2009), (site = EM_SITE, year = 2011), (site = EM_SITE, year = 2014),
-                (site = EM_SITE, year = 2015), (site = SM_SITE, year = 2010), (site = SM_SITE, year = 2011)]
+# (site, year) panel list — matches plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl's
+# EM_ROW1_YEARS/EM_ROW2_YEAR/winter_years_sm — 4 x 2 grid, row-major, legend in the last slot.
+const PANELS = [(site = EM_SITE, year = 2009), (site = EM_SITE, year = 2010),
+                (site = EM_SITE, year = 2011), (site = EM_SITE, year = 2014),
+                (site = EM_SITE, year = 2015), (site = SM_SITE, year = 2010),
+                (site = SM_SITE, year = 2011)]
 
 turb_file(site, year) = joinpath(site.turb_dir, "winter$(year)", "kepsilon$(SRC_TAG)_UVstress_winter$(year).jld2")
 les_file(site, year)  = isnothing(site.les_dir) ? nothing :
@@ -212,12 +238,32 @@ function bottom_Tinsitu_series(fts)
     return Float64.(fts.times) ./ 86400.0, T_bot
 end
 
+# SMS09h.mat (Southern Mooring, winter 2010) records every one of its 15 sensor
+# depths a uniform ~18 m deeper than the equivalent sensor in the following
+# year's deployment (SMS10h.mat), including a deepest sensor at 396 m versus a
+# recorded site water depth of only 380 m. The data producer suspects the
+# deepest value is a typo, but since the offset is uniform across the whole
+# chain rather than isolated to one sensor, every depth in this one file is
+# shifted up by 20 m (matches process_lake_superior_southern_eastern_moorings.jl)
+# — deepest sensor becomes 376 m. Revert once the data producer confirms/fixes
+# the source file.
+function apply_known_depth_corrections!(dep, filename)
+    filename == "SMS09h.mat" && (dep .-= 20.0)
+    return dep
+end
+
 # ── Observed sensor time series (continuous hourly record) ───────────────────
-# sensor = :bottom (argmax depth) or :surface (argmin depth).
+# sensor = :bottom (argmax depth) or :surface (argmin depth). Also returns Z,
+# the deployment's own recorded (nominal) total water depth (m) — not the
+# deepest sensor's mounting depth — so callers can report/caption the site's
+# actual water depth for comparison against the model's column depth H. (Z is
+# a more reliable "how deep is it here" number than the deepest sensor's `dep`:
+# e.g. SMS09h.mat's deepest sensor reads deeper than its own file's Z, and
+# EM winter 2010's deployment never sent a sensor anywhere near the bottom.)
 t2dt(t::Real) = DateTime(2000, 1, 1) + Millisecond(round(Int64, (t - 730486.0) * 86_400_000.0))
 
 function observed_sensor_series(site, year, t_iso, sensor::Symbol; ndays = 60)
-    isnothing(t_iso) && return (Float64[], Float64[])
+    isnothing(t_iso) && return (Float64[], Float64[], NaN)
     for f in sort(readdir(OBS_DIR; join = true))
         isdir(f) || continue
         for fn in sort(readdir(f))
@@ -229,7 +275,7 @@ function observed_sensor_series(site, year, t_iso, sensor::Symbol; ndays = 60)
             dts   = t2dt.(t_raw)
             (dts[1] <= t_iso <= dts[end] - Day(ndays)) || continue
 
-            dep   = vec(Float64.(reshape(data["dep"], :)))
+            dep   = apply_known_depth_corrections!(vec(Float64.(reshape(data["dep"], :))), fn)
             T_raw = data["T"]
             Ndep, Nt = length(dep), length(t_raw)
             T = size(T_raw) == (Ndep, Nt) ? Float64.(T_raw) : Float64.(T_raw')
@@ -237,10 +283,11 @@ function observed_sensor_series(site, year, t_iso, sensor::Symbol; ndays = 60)
 
             idx  = findall(dt -> t_iso <= dt <= t_iso + Day(ndays), dts)
             days = [Dates.value(dts[i] - t_iso) / (1000 * 86400.0) for i in idx]
-            return days, T[sensor_idx, idx]
+            Z    = haskey(data, "Z") ? Float64(data["Z"]) : NaN
+            return days, T[sensor_idx, idx], Z
         end
     end
-    return Float64[], Float64[]
+    return Float64[], Float64[], NaN
 end
 
 # Linear interpolation of a (days, values) record onto arbitrary query days.
@@ -281,7 +328,7 @@ function cumtrapz(t, y)
     return out
 end
 
-function simple_Tbot_model(t_iso, H, obs_sfc_days, obs_sfc_T; ndays = 60)
+function simple_Tbot_model(t_iso, H, T_bot0, obs_sfc_days, obs_sfc_T; ndays = 60)
     t_glen_days, Q_precomp_Wm2, Qu, Qv = load_glen_forcing_raw(t_iso; ndays)
     (isempty(t_glen_days) || isempty(obs_sfc_days)) && return (Float64[], Float64[])
 
@@ -311,7 +358,7 @@ function simple_Tbot_model(t_iso, H, obs_sfc_days, obs_sfc_T; ndays = 60)
     end
 
     integrand = QT .* [mixed_to_bottom(L_MO[i], QT[i], H) ? 1.0 : 0.0 for i in eachindex(L_MO)]
-    T_bot     = T_START .- cumtrapz(t_sec, integrand) ./ H
+    T_bot     = T_bot0 .- cumtrapz(t_sec, integrand) ./ H
     return t_days, T_bot
 end
 
@@ -340,34 +387,70 @@ for (site, year) in PANELS
     turb_days, turb_T = bottom_Tinsitu_series(turb_fts)
     H                 = turb_fts.grid.Lz
 
-    obs_days, obs_T         = observed_sensor_series(site, year, t_iso, :bottom)
-    obs_sfc_days, obs_sfc_T = observed_sensor_series(site, year, t_iso, :surface)
-    model_days, model_T     = simple_Tbot_model(t_iso, H, obs_sfc_days, obs_sfc_T)
+    obs_days, obs_T, obs_Z             = observed_sensor_series(site, year, t_iso, :bottom)
+    obs_sfc_days, obs_sfc_T, _         = observed_sensor_series(site, year, t_iso, :surface)
+
+    # Start the analytical model from the *observed* T_bot(0), not a fixed 4 °C —
+    # actual starting values vary by site/year (e.g. SM 2010/2011 start at 3.94/3.83
+    # °C, not 4.0), which matters most for the deep Southern Mooring column.
+    T_bot0 = isempty(obs_days) ? T_START_FALLBACK : interp_at(obs_days, obs_T, [0.0])[1]
+
+    # Use the deployment's own recorded water depth Z for the analytical model's
+    # H (not the model grid's Lz) — falls back to Lz only if Z is unavailable.
+    H_analytical = isnan(obs_Z) ? H : obs_Z
+
+    model_days, model_T = simple_Tbot_model(t_iso, H_analytical, T_bot0, obs_sfc_days, obs_sfc_T)
 
     panel_data[key] = (les_days = les_days, les_T = les_T,
                        turb_days = turb_days, turb_T = turb_T,
                        model_days = model_days, model_T = model_T,
-                       obs_days = obs_days, obs_T = obs_T)
+                       obs_days = obs_days, obs_T = obs_T, obs_Z = obs_Z,
+                       H = H, t_iso = t_iso)
 end
 isempty(panel_data) && error("No k-ε TURB outputs found for FORCING_SOURCE=$(FORCING_SOURCE)")
 
-#####
-##### Plotting: 2 x 3 grid, one subplot per (site, winter) panel
-#####
-function plot_Tbot_timeseries(filename)
-    fig = Figure(size = (1090, 620), fontsize = 11, figure_padding = (6, 10, 6, 4))
+# Report the deployment's own recorded water depth Z per panel (alongside the
+# model's water-column depth H, for comparison) so it can be added to the
+# figure caption.
+@info "Recorded site water depth Z per panel (model water-column depth H for comparison):"
+for (site, year) in PANELS
+    d = get(panel_data, (site.obs_prefix, year), nothing)
+    isnothing(d) && continue
+    @info "  $(site.name) Winter $year: Z = $(round(d.obs_Z, digits=1)) m  (model H = $(round(d.H, digits=1)) m)"
+end
 
-    positions = [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)]
+#####
+##### Plotting: 2 x 4 grid, one subplot per (site, winter) panel, legend last
+##### (matches plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl's
+##### panel arrangement: EM 2009/2010/2011/2014 on row 1, EM 2015 + SM 2010/2011
+##### + legend on row 2)
+#####
+const TBOT_XTICKS = 0:10:60   # day-since-start ticks
+
+function plot_Tbot_timeseries(filename)
+    fig = Figure(size = (195 * 4 + 40, 210 * 2 + 70), fontsize = 11, figure_padding = (6, 10, 6, 4))
+
+    positions = [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3)]
     axes      = Axis[]
     for (i, (site, year)) in enumerate(PANELS)
         row, col = positions[i]
+        d = get(panel_data, (site.obs_prefix, year), nothing)
+
+        # The isothermal start date differs by panel (site/year), so it's spelled
+        # out in the xlabel itself — "Days since 2008-12-16" — rather than a
+        # generic "Days since start" alongside plain day-count tick labels.
+        xlabel_str = isnothing(d) ? "Days since start" :
+                     "Days since $(Dates.format(d.t_iso, "yyyy-mm-dd"))"
+
         ax = CairoMakie.Axis(fig[row, col];
-                 title  = "$(site.name) Mooring, Winter $year",
-                 xlabel = L"\mathrm{Days\ since\ start}",
-                 ylabel = L"T_{\mathrm{bot}} \; (^\circ\mathrm{C})")
+                 title              = "$(site.name) Mooring, Winter $year",
+                 xlabel             = xlabel_str,
+                 ylabel             = col == 1 ? L"T_{\mathrm{bot}} \; (^\circ\mathrm{C})" : "",
+                 yticklabelsvisible = col == 1,
+                 yticksvisible      = col == 1,
+                 xticks             = collect(TBOT_XTICKS))
         push!(axes, ax)
 
-        d = get(panel_data, (site.obs_prefix, year), nothing)
         if isnothing(d)
             text!(ax, 0.5, 0.5; text = "no data", space = :relative,
                   align = (:center, :center), fontsize = 11, color = :gray)
@@ -390,12 +473,11 @@ function plot_Tbot_timeseries(filename)
                     LineElement(color = :black, linewidth = 2.0),
                     LineElement(color = :steelblue4, linewidth = 2.0),
                     LineElement(color = :purple, linewidth = 2.0, linestyle = :dash)]
-    legend_labels = ["Observations", "LES", "k-ε", "Simple model"]
-    Legend(fig[3, 1:3], legend_elems, legend_labels;
-           orientation = :horizontal, tellwidth = false, labelsize = 11,
-           framevisible = false, padding = (0, 0, 0, 0))
+    legend_labels = ["Observations", "LES", "k-ε", "Analytical model"]
+    Legend(fig[2, 4], legend_elems, legend_labels;
+           tellwidth = false, labelsize = 11, framevisible = false, padding = (0, 0, 0, 0))
 
-    Label(fig[0, 1:3],
+    Label(fig[0, 1:4],
           "Lake Superior Moorings — bottom temperature evolution (GLEN-forced, $(FORCING_SOURCE))";
           fontsize = 11, font = :bold, justification = :center)
 

@@ -116,9 +116,10 @@ const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
 const CSV_FILE  = joinpath(@__DIR__, "..", "figure_data",
                           "lake_superior_eastern_mooring",
                           "lake_superior_eastern_mooring_winter_start_dates.csv")
-const CSV_FILE_SM = joinpath(@__DIR__, "..", "figure_data",
-                          "lake_superior_southern_mooring",
-                          "lake_superior_southern_mooring_winter_start_dates.csv")
+# The southern mooring experiment script now also reads t_iso from CSV_FILE
+# (the eastern mooring's isothermal dates) rather than its own — the SM runs
+# are re-initialized to start at the same calendar date as the EM runs — so
+# the SM forcing window below must use the same CSV_FILE too.
 
 function read_isothermal_date(csv_file, year)
     isfile(csv_file) || return nothing
@@ -369,25 +370,45 @@ function compute_mean_forcing(years, csv_file, ref_variant_fn, H)
 end
 
 mean_forcing    = compute_mean_forcing(winter_years,    CSV_FILE,    reference_variant,    Lz_TURB)
-mean_forcing_sm = compute_mean_forcing(winter_years_sm, CSV_FILE_SM, reference_variant_sm, Lz_TURB_SM)
+mean_forcing_sm = compute_mean_forcing(winter_years_sm, CSV_FILE, reference_variant_sm, Lz_TURB_SM)
 
 #####
 ##### Plotting: 2 x 4 grid.
 ##### Row 1: eastern mooring winters 2009/2010/2011/2014.
-##### Row 2: legend, southern mooring winters 2010/2011, eastern mooring winter 2015.
+##### Row 2: eastern mooring winter 2015, southern mooring winters 2010/2011, legend.
 #####
+# The legend sits bottom-RIGHT so that column 1 is the leftmost data panel in
+# both rows and carries the y-axis label there.
+#
+# Y-axis decorations are chosen *per column*, never per panel: an axis's tick
+# labels protrude into its own grid cell, so if one row of a column drew them
+# and the other didn't, the two panels in that column would get different plot
+# widths and visibly fail to line up. Hence:
+#   • y-tick labels on columns 1–2 (both rows). Column 2 needs them because its
+#     row-2 panel is the first southern-mooring one: the SM grid is 384 m deep
+#     versus the eastern mooring's 212 m and the two sites are y-linked only
+#     within themselves, so without its own ticks the SM depth scale would be
+#     unreadable (and easily misread as sharing column 1's EM axis). Column 2's
+#     row-1 EM panel then repeats column 1's ticks purely to stay aligned.
+#   • the "z (m)" y-axis label on column 1 only — consistent down that column,
+#     so it costs no alignment while avoiding a redundant second label.
+show_yticklabels(col) = col <= 2
+show_ylabel(col)      = col == 1
+
 const EM_ROW1_YEARS = [2009, 2010, 2011, 2014]
 const EM_ROW2_YEAR  = 2015
 const NCOLS         = 4
-const T_XLIMS       = (0.0, 4.2)   # narrowed from 5.0 °C — little/no data above ~4.2 °C
+const T_XLIMS       = (0.0, 4.5)   # SM winter 2010's initial profile peaks at ~4.40 °C
+const T_XTICKS      = 0:1:4        # labelled ticks at whole degrees only
+const T_XMINORTICKS = IntervalsBetween(2)   # unlabelled minor tick every 0.5 °C
 
-# (mooring, year, row, col) for every data panel; the legend fills (2, 1).
+# (mooring, year, row, col) for every data panel; the legend fills (2, NCOLS).
 const PANELS = vcat(
-    [(mooring = :EM, year = y,           row = 1, col = i)     for (i, y) in enumerate(EM_ROW1_YEARS)],
-    [(mooring = :SM, year = y,           row = 2, col = i + 1) for (i, y) in enumerate(winter_years_sm)],
-    [(mooring = :EM, year = EM_ROW2_YEAR, row = 2, col = NCOLS)],
+    [(mooring = :EM, year = y, row = 1, col = i) for (i, y) in enumerate(EM_ROW1_YEARS)],
+    [(mooring = :EM, year = EM_ROW2_YEAR, row = 2, col = 1)],
+    [(mooring = :SM, year = y, row = 2, col = i + 1) for (i, y) in enumerate(winter_years_sm)],
 )
-const LEGEND_ROW, LEGEND_COL = 2, 1
+const LEGEND_ROW, LEGEND_COL = 2, NCOLS
 
 function plot_LES_TURB_profiles(filename, day)
     fig = Figure(size = (195 * NCOLS + 40, 210 * 2 + 70),
@@ -397,17 +418,21 @@ function plot_LES_TURB_profiles(filename, day)
     sm_axes = Axis[]
     for p in PANELS
         row, col, year = p.row, p.col, p.year
-        is_leftmost_data_col = (row == 1) ? (col == 1) : (col == 2)
         ax = CairoMakie.Axis(fig[row, col];
-                 title              = p.mooring == :EM ? "EM Winter $year" : "SM Winter $year",
-                 xlabel             = L"T \; (^\circ\mathrm{C})",
-                 ylabel             = is_leftmost_data_col ? L"z\;(\mathrm{m})" : "",
-                 ylabelrotation     = π/2,
-                 yticklabelsvisible = is_leftmost_data_col,
-                 xgridvisible       = true,
-                 ygridvisible       = true,
-                 xticksize          = 4,
-                 yticksize          = 4)
+                 title                = p.mooring == :EM ? "EM Winter $year" : "SM Winter $year",
+                 xlabel               = L"T \; (^\circ\mathrm{C})",
+                 ylabel               = show_ylabel(col) ? L"z\;(\mathrm{m})" : "",
+                 ylabelrotation       = π/2,
+                 yticklabelsvisible   = show_yticklabels(col),
+                 xticks               = T_XTICKS,
+                 xminorticks          = T_XMINORTICKS,
+                 xminorticksvisible   = true,
+                 xminortickalign      = 0,
+                 xgridvisible         = true,
+                 ygridvisible         = true,
+                 xticksize            = 4,
+                 xminorticksize       = 2.5,
+                 yticksize            = 4)
         push!(p.mooring == :EM ? em_axes : sm_axes, ax)
 
         if p.mooring == :EM
@@ -501,10 +526,12 @@ function plot_LES_TURB_profiles(filename, day)
           "Eastern & Southern Mooring — LES vs k-ε temperature, day $(day) (GLEN-forced, $(FORCING_SOURCE))";
           fontsize = 11, font = :bold, justification = :center)
 
-    # Without this, the legend (row 2, col 1) reports a narrower natural width than
-    # the axes and visibly shrinks that whole column relative to the others.
+    # Equal explicit sizes for every column: without them the legend column
+    # reports a narrower natural width than the axes and visibly shrinks. Equal
+    # sizes are correct here because only column 1 carries y-axis decorations
+    # (see the PANELS layout note above), so no column needs a size bump.
     for col in 1:NCOLS
-        colsize!(fig.layout, col, Relative(1/NCOLS))
+        colsize!(fig.layout, col, Relative(1 / NCOLS))
     end
 
     colgap!(fig.layout, 10)

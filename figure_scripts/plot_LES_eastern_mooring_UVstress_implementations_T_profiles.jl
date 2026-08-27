@@ -2,23 +2,25 @@
 ##### GLEN-forced Eastern Mooring — LES UVstress implementation comparison (T only)
 #####
 # Rows = winter year, columns = day 30 / 45 / 60 snapshots. Every panel overlays
-# three LES implementations, all with the same UV-decomposed (directional) wind
+# four LES implementations, all with the same UV-decomposed (directional) wind
 # stress, against the observed temperature profile (T only):
 #   • UVstress                       — default LES (WENO(order=9) advection,      (full model)  (blue,   solid)
-#                                        no explicit subgrid closure)
+#                                        no explicit subgrid closure, default Cd)
 #   • WENO5_UVstress                 — lower-order (5th) WENO advection            (simplified)  (orange, dashed)
 #   • SmagorinskyLilly_UVstress      — explicit Smagorinsky–Lilly subgrid closure  (simplified)  (green,  dotted)
-# The full 3-way comparison is only available for FORCING_SOURCE=coare_wind for
-# most winters (2009, 2010, 2011, 2014) — direct mostly only has the default
-# implementation, and 2015/coare_wind is missing SmagorinskyLilly; missing runs
-# are skipped with a warning rather than filling the panel.
+#   • Cd0.002_UVstress               — default LES but with the surface drag       (simplified)  (purple, dash-dot)
+#                                        coefficient fixed at Cd = 0.002
+# This 4-way comparison is only available for FORCING_SOURCE=coare_wind, and only
+# for winters 2009, 2010, 2011, 2014 (direct mostly only has the default
+# implementation, and 2015/coare_wind is missing both SmagorinskyLilly and
+# Cd0.002); missing runs are skipped with a warning rather than filling the panel.
 # The shared initial (day 0) profile is drawn once per panel as a grey dashed line,
 # and the observed profile (day 30 / 45 / 60) is overlaid in its matching column.
 # Each panel is annotated with the mean forcing (Q̄_h, Q̄_U) over the window leading
 # up to its snapshot day: 0–30 days, 30–45 days, or 45–60 days.
 #
 # Inputs  : data/LES_outputs/eastern_mooring_GLEN/
-#               LES_GLEN_winter<YEAR>_<forcing>[_WENO5|_SmagorinskyLilly]_UVstress_
+#               LES_GLEN_winter<YEAR>_<forcing>[_WENO5|_SmagorinskyLilly|_Cd0.002]_UVstress_
 #                   Lxy256_Lz212_Nxy128_Nz106/hourly_averaged_timeseries.jld2  (Tbar)
 #           figure_data/lake_superior_eastern_mooring/
 #               lake_superior_eastern_mooring_winter_start_dates.csv  (isothermal dates)
@@ -29,7 +31,7 @@
 #
 # Usage:
 #   julia plot_LES_eastern_mooring_UVstress_implementations_T_profiles.jl               # direct (default)
-#   julia plot_LES_eastern_mooring_UVstress_implementations_T_profiles.jl coare_wind     # full 3-way comparison
+#   julia plot_LES_eastern_mooring_UVstress_implementations_T_profiles.jl coare_wind     # full 4-way comparison
 #####
 
 using Oceananigans
@@ -150,6 +152,7 @@ const VARIANTS = [
     (impl_tag = "",                   color = :steelblue4, label = "LES (default: WENO9, no closure)", linestyle = :solid),
     (impl_tag = "_WENO5",             color = :darkorange, label = "LES (WENO5)",                       linestyle = :dash),
     (impl_tag = "_SmagorinskyLilly",  color = :seagreen,   label = "LES (Smagorinsky-Lilly)",           linestyle = :dot),
+    (impl_tag = "_Cd0.002",           color = :purple,     label = "LES (Cd = 0.002)",                  linestyle = :dashdot),
 ]
 
 variant_data = [Dict{Int, Dict{String, Any}}() for _ in VARIANTS]
