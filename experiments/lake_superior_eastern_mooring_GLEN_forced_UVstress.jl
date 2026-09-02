@@ -21,8 +21,16 @@
 #   (linearly averaging degrees would turn 359° & 1° into 180°).  The stress
 #   magnitude (momentum_flux) is filled separately as a scalar.
 #
-# Heat-flux forcing is unchanged from the sister script:
-#   Q_net = SHF + LHF - SW↓ - LW↓ + LW↑(T_sfc)       [W/m²]
+# Downwelling shortwave radiation penetrates the water column rather than being
+# absorbed entirely at the surface: it follows a Paulson & Simpson (1977) two-band
+# exponential attenuation profile (Jerlov Type I "clear water" coefficients — see
+# the note by SW_R/SW_ZETA1/SW_ZETA2 below), applied as a volumetric `Forcing` on
+# temperature (see shortwave_penetration_heating / T_SW_forcing):
+#   SW_down(z) = SW_net(0) · [ R·exp(z/ζ1) + (1−R)·exp(z/ζ2) ],  z ≤ 0
+#   ∂T/∂t |_SW = (1/ρ₀cₚ) · d(SW_down)/dz
+#
+# The top temperature flux BC therefore carries only the *non-solar* net heat flux:
+#   Q_nonsolar = SHF + LHF - LW↓ + LW↑(T_sfc)       [W/m²]
 # LW↑ = ε·σ·T_sfc⁴ is added online from the model surface temperature.
 #
 # Forcing source flag (`direct` | `coare_wind`):
@@ -139,6 +147,16 @@ const albedo_sw = 0.08     # broadband shortwave albedo of fresh water surface
 const ε_water   = 0.98     # longwave emissivity of water
 const σ_SB      = 5.67e-8  # W/(m²·K⁴) — Stefan-Boltzmann constant
 
+# Paulson & Simpson (1977) two-band shortwave-penetration coefficients (Jerlov Type I
+# "clear water"). Type I is an OCEAN clear-water classification; real lake water is
+# typically more turbid (shorter e-folding depths) than this, so treat the depth
+# distribution of solar heating here as indicative rather than quantitatively tuned
+# to Lake Superior — no lake-specific optical (Secchi-depth) measurements were
+# available when this was written.
+const SW_R     = 0.58   # fraction of SW_net(0) carried by the short (fast-decaying) band
+const SW_ZETA1 = 0.35   # m — e-folding depth of the short band
+const SW_ZETA2 = 23.0   # m — e-folding depth of the long (visible) band
+
 # ── Load GLEN half-hourly data ────────────────────────────────────────────────
 # Gap-filled product: momentum/heat fluxes are provided directly.  Choose between
 # the measured (`direct`) and COARE-bulk-from-wind (`coare_wind`) flux variants.
@@ -246,14 +264,20 @@ wdir_f = @. mod(atand(ex_f, ey_f), 360.0)
 # Simulation time axis: seconds since t_iso
 const t_forcing = Float64[Dates.value(t - t_iso) / 1000.0 for t in glen_t]
 
-# Pre-computed heat flux terms (W/m²), positive upward = lake cooling.
+# Net downwelling shortwave at the surface (after albedo). This is the SOURCE term
+# for the interior penetration profile (T_SW_forcing below) rather than being folded
+# into the surface flux BC.
+#   SW_net(0) = (1 - albedo) · SW↓
+const SW_net_vals = @. (1.0 - albedo_sw) * sw_f
+
+# Pre-computed NON-SOLAR heat flux terms (W/m²), positive upward = lake cooling.
 # LW_up = ε·σ·T_sfc⁴ is excluded here because it depends on the live surface
 # temperature; it is added inside the discrete boundary-condition function below.
-#   SW_net = (1 - albedo) · SW↓   — net absorbed shortwave (into lake → negative contribution)
-#   Q_precomp = SHF + LHF - SW_net - LW↓
-const SW_net_vals     = @. (1.0 - albedo_sw) * sw_f
-const Q_precomp_Wm2   = @. shf_f + lhf_f - SW_net_vals - ε_water * lw_f
-const Q_precomp_kin   = @. Q_precomp_Wm2 / (ρ₀ * cₚ)   # °C·m/s
+# SW is deliberately NOT included here — it enters the model as a volumetric
+# forcing on T (see T_SW_forcing) rather than as part of the top flux BC.
+#   Q_nonsolar = SHF + LHF - LW↓
+const Q_nonsolar_Wm2 = @. shf_f + lhf_f - ε_water * lw_f
+const Q_nonsolar_kin = @. Q_nonsolar_Wm2 / (ρ₀ * cₚ)   # °C·m/s
 
 # Directional kinematic momentum flux (m²/s²), split into x/y from wind_direction.
 # θ = wind_direction is meteorological (direction wind blows FROM, cw from north);
@@ -269,8 +293,9 @@ const Qv_vals    = @. τ_mag_kin * ey_f
 const ustar_vals = @. sqrt(max(mom_f, 0.0) / ρ_air)
 
 @info "Forcing summary (60-day window):"
-@info "  Q_precomp (W/m²): mean=$(round(mean(Q_precomp_Wm2), digits=1))" *
-      "  min=$(round(minimum(Q_precomp_Wm2), digits=1))  max=$(round(maximum(Q_precomp_Wm2), digits=1))"
+@info "  Q_nonsolar (W/m²): mean=$(round(mean(Q_nonsolar_Wm2), digits=1))" *
+      "  min=$(round(minimum(Q_nonsolar_Wm2), digits=1))  max=$(round(maximum(Q_nonsolar_Wm2), digits=1))"
+@info "  SW_net(0) (W/m²) : mean=$(round(mean(SW_net_vals), digits=1))  max=$(round(maximum(SW_net_vals), digits=1))  (absorbed with depth, not at z=0)"
 @info "  LW_up at 4 °C (W/m²): $(round(ε_water * σ_SB * (4.0 + 273.15)^4, digits=1))  (added online from T_sfc)"
 @info "  u*     (m/s)  : mean=$(round(mean(ustar_vals), digits=4))  max=$(round(maximum(ustar_vals), digits=4))"
 @info "  U_meas (m/s)  : mean=$(round(mean(ws_f), digits=2))  max=$(round(maximum(ws_f), digits=2))"
@@ -289,18 +314,38 @@ const ustar_vals = @. sqrt(max(mom_f, 0.0) / ρ_air)
 end
 
 # Heat flux BC — discrete form so it can read the live surface temperature.
-# Full Q_net = Q_precomp(t) + LW_up(T_sfc)
+# Full Q = Q_nonsolar(t) + LW_up(T_sfc)   (SW handled separately by T_SW_forcing)
 #   LW_up = ε·σ·(T_sfc + 273.15)⁴  (upward thermal emission from lake, positive upward)
 # T_sfc is Conservative Temperature in °C at the top model cell.
 @inline function Qᵀ_obs(i, j, grid, clock, model_fields, p)
     T_sfc   = @inbounds model_fields.T[i, j, p.Nz]
     LW_up   = p.ε_water * p.σ_SB * (T_sfc + 273.15)^4 / (p.ρ₀ * p.cₚ)
-    return interp_linear(p.t_forcing, p.Q_precomp_kin, Float64(clock.time)) + LW_up
+    return interp_linear(p.t_forcing, p.Q_nonsolar_kin, Float64(clock.time)) + LW_up
 end
 
 # Momentum flux BCs — continuous form; no state dependence.
 @inline Qᵁ_obs(t, p) = interp_linear(p.t_forcing, p.Qu_vals, t)   # x-stress
 @inline Qᵛ_obs(t, p) = interp_linear(p.t_forcing, p.Qv_vals, t)   # y-stress
+
+# ── Penetrative shortwave forcing ──────────────────────────────────────────────
+# Volumetric heating rate from absorption of the two-band exponential SW profile:
+#   SW_down(z) = SW_net(0) · [ R·exp(z/ζ1) + (1−R)·exp(z/ζ2) ],  z ≤ 0
+#   ∂T/∂t = (1/ρ₀cₚ) · d(SW_down)/dz
+#         = (SW_net(0)/ρ₀cₚ) · [ (R/ζ1)·exp(z/ζ1) + ((1−R)/ζ2)·exp(z/ζ2) ]
+# (Continuous-form Oceananigans Forcing: on a grid with topology (Flat, Flat,
+# Bounded), Flat dimensions are omitted from the coordinate arguments, so the
+# signature is func(z, t, parameters) rather than func(x, y, z, t, parameters) —
+# see Oceananigans.Forcings.ContinuousForcing's docstring.)
+@inline function shortwave_penetration_heating(z, t, p)
+    I0    = interp_linear(p.t_forcing, p.SW_net_vals, Float64(t))
+    dI_dz = I0 * ( (p.R / p.ζ1) * exp(z / p.ζ1) + ((1 - p.R) / p.ζ2) * exp(z / p.ζ2) )
+    return dI_dz / (p.ρ₀ * p.cₚ)
+end
+
+const T_SW_forcing = Forcing(shortwave_penetration_heating,
+                              parameters = (; t_forcing, SW_net_vals,
+                                              R = SW_R, ζ1 = SW_ZETA1, ζ2 = SW_ZETA2,
+                                              ρ₀, cₚ))
 
 # ── Grid ──────────────────────────────────────────────────────────────────────
 model_architecture = CPU()
@@ -360,7 +405,7 @@ function setup_model(closure)
     T_bcs = FieldBoundaryConditions(
                 top = FluxBoundaryCondition(Qᵀ_obs,
                           discrete_form = true,
-                          parameters = (; t_forcing, Q_precomp_kin,
+                          parameters = (; t_forcing, Q_nonsolar_kin,
                                           Nz, ρ₀, cₚ, ε_water, σ_SB)))
     u_bcs = FieldBoundaryConditions(
                 top = FluxBoundaryCondition(Qᵁ_obs,
@@ -389,6 +434,7 @@ function setup_model(closure)
         coriolis            = FPlane(f = f₀),
         closure             = closure,
         tracers             = tracers,
+        forcing             = (; T = T_SW_forcing),
         boundary_conditions = (; T = T_bcs, u = u_bcs, v = v_bcs),
     )
 
@@ -439,6 +485,9 @@ function run_simulation(model, closure_name, OUTPUT_PATH)
     N²bar = Field(Average(N²_op, dims = (1, 2)))
 
     # ── Monin–Obukhov length timeseries ──────────────────────────────────────
+    # Uses the NON-SOLAR + LW_up surface flux (the actual top flux BC) as the
+    # surface buoyancy flux driver — the penetrative SW enters as a volumetric
+    # forcing rather than a z=0 flux, so it is deliberately excluded here.
     κ_vonK = 0.41
     L_MO_series      = Float64[]
     t_series         = Float64[]
@@ -452,7 +501,7 @@ function run_simulation(model, closure_name, OUTPUT_PATH)
         T_sfc  = Array(interior(sim.model.tracers.T, 1, 1, Nz))[1]
         α_sfc  = gsw_alpha(S_lake, T_sfc, 0.0)
         LW_up_kin = ε_water * σ_SB * (T_sfc + 273.15)^4 / (ρ₀ * cₚ)
-        Qᵀ_now = interp_linear(t_forcing, Q_precomp_kin, t_now) + LW_up_kin
+        Qᵀ_now = interp_linear(t_forcing, Q_nonsolar_kin, t_now) + LW_up_kin
         Qu_now = interp_linear(t_forcing, Qu_vals, t_now)
         Qv_now = interp_linear(t_forcing, Qv_vals, t_now)
         Qmag   = sqrt(Qu_now^2 + Qv_now^2)   # total kinematic stress magnitude (m²/s²)
