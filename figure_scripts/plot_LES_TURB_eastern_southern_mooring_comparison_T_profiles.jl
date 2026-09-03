@@ -24,10 +24,11 @@
 # M_sfc(τ) — a time-weighted average of the instantaneous forcing ratio, cumulative
 # from the simulation start (τ = 0) through the snapshot day, that up-weights more
 # recent forcing (see the Msfc section below). Each panel is also annotated,
-# along the top, with the mean error (ME, model − obs) and RMSE of every
-# plotted model line against the raw observed sensor-depth temperatures — one
-# "value_ME (value_RMSE) °C" row per model in that model's own line color,
-# under a single unlabeled "ME (RMSE)" header — see model_obs_stats() below.
+# along the top, with the depth-weighted (trapezoidal-integral) mean error
+# (ME, model − obs) and RMSE of every plotted model line against the raw
+# observed sensor-depth temperatures — one "value_ME (value_RMSE) °C" row per
+# model in that model's own line color, under a single unlabeled "ME (RMSE)"
+# header — see model_obs_stats() below.
 # The block anchors left or right depending on the default k-ε (or first
 # available model's) surface temperature: profiles converge near the surface,
 # so a *small* surface value means the lines cluster on the left (open space
@@ -319,7 +320,7 @@ panel_profile_turb(dk, d)    = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_TU
 panel_profile_les(dk, d)     = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_LES)
 panel_profile_turb_sm(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_SM)
 
-# ── Model-vs-observation error stats (LES + default k-ε only) ─────────────────
+# ── Model-vs-observation error stats (every plotted model line) ───────────────
 # Linear interpolation of a model profile (zC ascending, bottom → surface) onto
 # an arbitrary target depth (negative z), clamped to the profile's own ends —
 # same clamping convention as interp_to_common() in the mooring processing script.
@@ -335,18 +336,40 @@ function interp_model_at(zC, Tmodel, ztarget)
     end
 end
 
-# Mean error (model − obs) and RMSE of a model profile against the raw observed
-# sensor-depth temperatures (dep_obs positive-down; Tobs may contain NaN for
-# dropped sensors, which are skipped). Returns (ME = NaN, RMSE = NaN) if no
+# Depth-weighted (trapezoidal-integral) mean error (model − obs) and RMSE of a
+# model profile against the raw observed sensor-depth temperatures (dep_obs
+# positive-down; Tobs may contain NaN for dropped sensors, which are skipped).
+# Plain point-wise averaging biases the stats toward whatever depth range
+# happens to have more sensors (usually near the surface); weighting each
+# error by half the distance to its neighboring sensors instead approximates
+#   ME   = ∫ err(z)   dz / ∫ dz
+#   RMSE = √(∫ err(z)² dz / ∫ dz)
+# over the sensor span, so widely- and tightly-spaced sensors count equally
+# per unit depth. Falls back to the single point when only one sensor
+# overlaps (no interval to weight by). Returns (ME = NaN, RMSE = NaN) if no
 # valid sensor overlaps.
 function model_obs_stats(zC, Tmodel, dep_obs, Tobs)
-    errs = Float64[]
-    for i in eachindex(dep_obs)
-        isnan(Tobs[i]) && continue
-        push!(errs, interp_model_at(zC, Tmodel, -dep_obs[i]) - Tobs[i])
+    valid = .!isnan.(Tobs)
+    any(valid) || return (ME = NaN, RMSE = NaN)
+
+    d   = dep_obs[valid]
+    T   = Tobs[valid]
+    idx = sortperm(d)
+    d   = d[idx]
+    T   = T[idx]
+    errs = [interp_model_at(zC, Tmodel, -d[i]) - T[i] for i in eachindex(d)]
+
+    n = length(d)
+    n == 1 && return (ME = errs[1], RMSE = abs(errs[1]))
+
+    w        = similar(d, Float64)
+    w[1]     = (d[2] - d[1]) / 2
+    w[end]   = (d[end] - d[end - 1]) / 2
+    for i in 2:(n - 1)
+        w[i] = (d[i + 1] - d[i - 1]) / 2
     end
-    isempty(errs) && return (ME = NaN, RMSE = NaN)
-    return (ME = mean(errs), RMSE = sqrt(mean(errs .^ 2)))
+    W = sum(w)
+    return (ME = sum(w .* errs) / W, RMSE = sqrt(sum(w .* errs .^ 2) / W))
 end
 
 #####
