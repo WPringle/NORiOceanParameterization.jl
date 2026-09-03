@@ -25,6 +25,11 @@
 #                   Mooring site, so those two panels omit this line)
 #   • k-ε        — Tbar sampled at the same observed sensor depth as LES        (blue)
 #                   (UVstress + TEOS-10 EOS, the default)
+#   • k-ε (unidirectional wind stress) — all wind momentum on the u-stress    (orange, dashed)
+#   • k-ε (No thermobaricity) — UVstress + full TEOS-10 with Z clamped to 0,  (green, dotted)
+#                   i.e. the exact cabbeling curve, no thermobaricity
+#                   (both extra k-ε variants match the VARIANTS list in
+#                   plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl)
 #   • Analytical model (dashed, purple) — a diagnostic argument for T_bot, evaluated
 #     hourly (not daily) directly from the raw GLEN forcing, with both the
 #     Monin–Obukhov length L_MO *and* the upwelling-longwave correction in Q_T
@@ -51,7 +56,9 @@
 #   • Observations — continuous hourly record at the deepest sensor           (red)
 #
 # Inputs  : data/TURB_outputs/{eastern,southern}_mooring_GLEN_forced/winter<YEAR>/
-#               kepsilon[_coare_wind]_UVstress_winter<YEAR>.jld2      (Tbar)
+#               kepsilon[_coare_wind]_UVstress_winter<YEAR>.jld2                     (Tbar, k-ε default)
+#               kepsilon[_coare_wind]_winter<YEAR>.jld2                              (Tbar, k-ε unidirectional)
+#               kepsilon[_coare_wind]_UVstress_EOSteos10cabbeling_winter<YEAR>.jld2  (Tbar, k-ε no thermobaricity)
 #           data/LES_outputs/eastern_mooring_GLEN/
 #               LES_GLEN_winter<YEAR>_<forcing>_UVstress_Lxy256_Lz212_Nxy128_Nz106/
 #                   hourly_averaged_timeseries.jld2   (Tbar)
@@ -145,10 +152,20 @@ const PANELS = [(site = EM_SITE, year = 2009), (site = EM_SITE, year = 2010),
                 (site = EM_SITE, year = 2015), (site = SM_SITE, year = 2010),
                 (site = SM_SITE, year = 2011)]
 
-turb_file(site, year) = joinpath(site.turb_dir, "winter$(year)", "kepsilon$(SRC_TAG)_UVstress_winter$(year).jld2")
+turb_file(site, year, uv_tag, eos_tag) = joinpath(site.turb_dir, "winter$(year)",
+    "kepsilon$(SRC_TAG)$(uv_tag)$(eos_tag)_winter$(year).jld2")
 les_file(site, year)  = isnothing(site.les_dir) ? nothing :
     joinpath(site.les_dir, "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress_$(LES_STEM)",
              "hourly_averaged_timeseries.jld2")
+
+# k-ε variants overlaid on every panel — matches the VARIANTS list in
+# plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl (same files,
+# same colors/styles), so the two figures read consistently together.
+const VARIANTS = [
+    (uv_tag = "_UVstress", eos_tag = "",                     color = :steelblue4, label = "k-ε",                               linestyle = :solid),
+    (uv_tag = "",          eos_tag = "",                     color = :darkorange, label = "k-ε (unidirectional wind stress)", linestyle = :dash),
+    (uv_tag = "_UVstress", eos_tag = "_EOSteos10cabbeling",  color = :seagreen,   label = "k-ε (No thermobaricity)",          linestyle = :dot),
+]
 
 const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
                   "US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc"
@@ -392,7 +409,9 @@ for (site, year) in PANELS
     key   = (site.obs_prefix, year)
     t_iso = read_isothermal_date(site.csv_file, year)
 
-    turb_f = turb_file(site, year)
+    # VARIANTS[1] (default UVstress + TEOS-10 k-ε) is required — it sets H and
+    # anchors the sample depth/analytical-model inputs shared by every variant.
+    turb_f = turb_file(site, year, VARIANTS[1].uv_tag, VARIANTS[1].eos_tag)
     les_f  = les_file(site, year)
 
     if !isfile(turb_f)
@@ -411,6 +430,26 @@ for (site, year) in PANELS
     sample_depth = isnan(obs_bottom_dep) ? H : obs_bottom_dep
 
     turb_days, turb_T = bottom_Tinsitu_series(turb_fts, sample_depth)
+
+    # The two extra k-ε variants (unidirectional wind stress; no thermobaricity)
+    # — same VARIANTS list/colors as plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl.
+    # Each falls back to empty series (silently, since not every site/year has
+    # every variant run) if its file is missing.
+    variant_series = Vector{Tuple{Vector{Float64}, Vector{Float64}}}(undef, length(VARIANTS))
+    for (vi, v) in enumerate(VARIANTS)
+        if vi == 1
+            variant_series[vi] = (turb_days, turb_T)
+            continue
+        end
+        vf = turb_file(site, year, v.uv_tag, v.eos_tag)
+        variant_series[vi] = if isfile(vf)
+            bottom_Tinsitu_series(FieldTimeSeries(vf, "Tbar"), sample_depth)
+        else
+            @warn "Missing k-ε variant output ($(v.label)): $vf"
+            (Float64[], Float64[])
+        end
+    end
+
     les_days, les_T = if !isnothing(les_f) && isfile(les_f)
         bottom_Tinsitu_series(FieldTimeSeries(les_f, "Tbar"), sample_depth)
     else
@@ -433,6 +472,7 @@ for (site, year) in PANELS
 
     panel_data[key] = (les_days = les_days, les_T = les_T,
                        turb_days = turb_days, turb_T = turb_T,
+                       variant_series = variant_series,
                        model_days = model_days, model_T = model_T,
                        obs_days = obs_days, obs_T = obs_T, obs_Z = obs_Z,
                        obs_bottom_dep = obs_bottom_dep, H = H, t_iso = t_iso)
@@ -491,7 +531,10 @@ function plot_Tbot_timeseries(filename)
 
         !isempty(d.obs_days)   && lines!(ax, d.obs_days, d.obs_T; color = :firebrick, linewidth = 1.5)
         !isempty(d.les_days)   && lines!(ax, d.les_days, d.les_T; color = :black, linewidth = 2.0)
-        !isempty(d.turb_days)  && lines!(ax, d.turb_days, d.turb_T; color = :steelblue4, linewidth = 2.0)
+        for (vi, v) in enumerate(VARIANTS)
+            vdays, vT = d.variant_series[vi]
+            !isempty(vdays) && lines!(ax, vdays, vT; color = v.color, linewidth = 2.0, linestyle = v.linestyle)
+        end
         !isempty(d.model_days) && lines!(ax, d.model_days, d.model_T;
                                           color = :purple, linewidth = 2.0, linestyle = :dash)
 
@@ -501,11 +544,15 @@ function plot_Tbot_timeseries(filename)
     linkyaxes!(axes...)
     linkxaxes!(axes...)
 
-    legend_elems = [LineElement(color = :firebrick, linewidth = 1.5),
-                    LineElement(color = :black, linewidth = 2.0),
-                    LineElement(color = :steelblue4, linewidth = 2.0),
-                    LineElement(color = :purple, linewidth = 2.0, linestyle = :dash)]
-    legend_labels = ["Observations", "LES", "k-ε", "Analytical model"]
+    legend_elems  = Any[LineElement(color = :firebrick, linewidth = 1.5),
+                        LineElement(color = :black, linewidth = 2.0)]
+    legend_labels = Any["Observations", "LES"]
+    for v in VARIANTS
+        push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
+        push!(legend_labels, v.label)
+    end
+    push!(legend_elems,  LineElement(color = :purple, linewidth = 2.0, linestyle = :dash))
+    push!(legend_labels, "Analytical model")
     Legend(fig[2, 4], legend_elems, legend_labels;
            tellwidth = false, labelsize = 11, framevisible = false, padding = (0, 0, 0, 0))
 
