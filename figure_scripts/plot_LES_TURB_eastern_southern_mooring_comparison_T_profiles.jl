@@ -25,13 +25,15 @@
 # M_sfc(τ) — a time-weighted average of the instantaneous forcing ratio, cumulative
 # from the simulation start (τ = 0) through the snapshot day, that up-weights more
 # recent forcing (see the Msfc section below). Each panel is also annotated,
-# along the top in the corresponding line color, with the mean error (ME, model
-# − obs) and RMSE of LES and the default k-ε variant against the raw observed
-# sensor-depth temperatures (the other two k-ε variants are omitted to avoid
-# clutter) — see model_obs_stats() below. The text anchors left or right
-# depending on the default k-ε (or LES) surface temperature, since the model
-# curves converge near the surface and that puts the open space on the
-# opposite side of the T range.
+# along the top, with the mean error (ME, model − obs) and RMSE of every
+# plotted model line against the raw observed sensor-depth temperatures — one
+# "value_ME (value_RMSE) °C" row per model in that model's own line color,
+# under a single unlabeled "ME (RMSE)" header — see model_obs_stats() below.
+# The block anchors left or right depending on the default k-ε (or first
+# available model's) surface temperature: profiles converge near the surface,
+# so a *small* surface value means the lines cluster on the left (open space
+# on the right) and a *large* one means they cluster on the right (open space
+# on the left).
 #
 # Inputs  : data/TURB_outputs/eastern_mooring_GLEN_forced/winter<YEAR>/
 #               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling]_winter<YEAR>.jld2  (Tbar)
@@ -505,9 +507,9 @@ function plot_LES_TURB_profiles(filename, day)
                  yticksize            = 4)
         push!(p.mooring == :EM ? em_axes : sm_axes, ax)
 
-        stats_entries = NamedTuple[]   # (color, ME, RMSE) — LES + default k-ε only
-        les_profile   = nothing
-        v1_profile    = nothing        # default k-ε profile, used for stats + text-side placement
+        stats_entries  = NamedTuple[]   # (color, ME, RMSE) — every model line plotted in this panel
+        model_profiles = NamedTuple[]   # (color, zC, profile) — same lines, for the stats computation
+        v1_profile     = nothing        # default k-ε profile, used only for text-side placement
 
         if p.mooring == :EM
             dk_ref = reference_variant(year)
@@ -520,6 +522,7 @@ function plot_LES_TURB_profiles(filename, day)
                 les_profile = panel_profile_les(les_data[year], day)
                 lines!(ax, les_profile, zC_LES;
                        color = LES_COLOR, linewidth = 2.5)
+                push!(model_profiles, (color = LES_COLOR, zC = zC_LES, profile = les_profile))
             end
 
             for (vi, v) in enumerate(VARIANTS)
@@ -529,6 +532,7 @@ function plot_LES_TURB_profiles(filename, day)
                 vi == 1 && (v1_profile = profile)
                 lines!(ax, profile, zC_TURB;
                        color = v.color, linewidth = 2.0, linestyle = v.linestyle)
+                push!(model_profiles, (color = v.color, zC = zC_TURB, profile = profile))
             end
 
             obs_T  = obs_profile_for_day(obs_em, day)
@@ -543,13 +547,9 @@ function plot_LES_TURB_profiles(filename, day)
 
             if !isnothing(wy_idx)
                 dep_o, T_o = obs_em.dep_raw[wy_idx], obs_T[wy_idx]
-                if !isnothing(les_profile)
-                    s = model_obs_stats(zC_LES, les_profile, dep_o, T_o)
-                    isnan(s.ME) || push!(stats_entries, (color = LES_COLOR, ME = s.ME, RMSE = s.RMSE))
-                end
-                if !isnothing(v1_profile)
-                    s = model_obs_stats(zC_TURB, v1_profile, dep_o, T_o)
-                    isnan(s.ME) || push!(stats_entries, (color = VARIANTS[1].color, ME = s.ME, RMSE = s.RMSE))
+                for mp in model_profiles
+                    s = model_obs_stats(mp.zC, mp.profile, dep_o, T_o)
+                    isnan(s.ME) || push!(stats_entries, (color = mp.color, ME = s.ME, RMSE = s.RMSE))
                 end
             end
 
@@ -568,12 +568,15 @@ function plot_LES_TURB_profiles(filename, day)
                 vi == 1 && (v1_profile = profile)
                 lines!(ax, profile, zC_TURB_SM;
                        color = v.color, linewidth = 2.0, linestyle = v.linestyle)
+                push!(model_profiles, (color = v.color, zC = zC_TURB_SM, profile = profile))
             end
 
             dk_cs = get(coare_southern_data_sm, year, nothing)
             if !isnothing(dk_cs) && day_available(dk_cs, day)
-                lines!(ax, panel_profile_turb_sm(dk_cs, day), zC_TURB_SM;
+                profile_cs = panel_profile_turb_sm(dk_cs, day)
+                lines!(ax, profile_cs, zC_TURB_SM;
                        color = COARE_SOUTHERN_COLOR, linewidth = 2.0, linestyle = COARE_SOUTHERN_LINESTYLE)
+                push!(model_profiles, (color = COARE_SOUTHERN_COLOR, zC = zC_TURB_SM, profile = profile_cs))
             end
 
             obs_T  = obs_profile_for_day(obs_sm, day)
@@ -586,32 +589,37 @@ function plot_LES_TURB_profiles(filename, day)
                 end
             end
 
-            if !isnothing(wy_idx) && !isnothing(v1_profile)
+            if !isnothing(wy_idx)
                 dep_o, T_o = obs_sm.dep_raw[wy_idx], obs_T[wy_idx]
-                s = model_obs_stats(zC_TURB_SM, v1_profile, dep_o, T_o)
-                isnan(s.ME) || push!(stats_entries, (color = VARIANTS[1].color, ME = s.ME, RMSE = s.RMSE))
+                for mp in model_profiles
+                    s = model_obs_stats(mp.zC, mp.profile, dep_o, T_o)
+                    isnan(s.ME) || push!(stats_entries, (color = mp.color, ME = s.ME, RMSE = s.RMSE))
+                end
             end
 
             ylims!(ax, (-Lz_TURB_SM - 5, 5))
         end
         xlims!(ax, T_XLIMS)
 
-        # ME / RMSE (model vs. obs) — stacked along the top, one line per model in
-        # that model's own line color (LES first (EM only), then default k-ε).
-        # Anchored left or right depending on where the surface (z ≈ 0) model
-        # temperature sits in the T range: profiles converge near the surface,
-        # so whichever half of the axis the surface value is far from has the
-        # open space for text without crossing the lines.
+        # ME (RMSE) (model vs. obs) — stacked along the top under a single "ME
+        # (RMSE)" header, one value line per plotted model in that model's own
+        # line color. Anchored left or right depending on where the surface
+        # (z ≈ 0) default k-ε temperature sits in the T range: profiles converge
+        # near the surface, so a *small* surface value means the lines cluster on
+        # the left, leaving the open space on the right (and vice versa).
         mid_T     = sum(T_XLIMS) / 2
-        surface_T = !isnothing(v1_profile) ? v1_profile[end] :
-                    !isnothing(les_profile) ? les_profile[end] : nothing
-        anchor_x, halign = isnothing(surface_T) || surface_T > mid_T ? (0.97, :right) : (0.03, :left)
-        for (i, e) in enumerate(stats_entries)
-            text!(ax, anchor_x, 0.97 - (i - 1) * 0.08;
-                  text  = latexstring("\\mathrm{ME}=", @sprintf("%+.2f", e.ME),
-                                      ",\\ \\mathrm{RMSE}=", @sprintf("%.2f", e.RMSE),
-                                      "\\;^\\circ\\mathrm{C}"),
-                  space = :relative, align = (halign, :top), color = e.color, fontsize = 10)
+        surface_T = !isnothing(v1_profile)      ? v1_profile[end] :
+                    !isempty(model_profiles)    ? model_profiles[1].profile[end] : nothing
+        anchor_x, halign = isnothing(surface_T) || surface_T > mid_T ? (0.03, :left) : (0.97, :right)
+        if !isempty(stats_entries)
+            text!(ax, anchor_x, 0.97;
+                  text = "ME (RMSE)", space = :relative, align = (halign, :top), fontsize = 10)
+            for (i, e) in enumerate(stats_entries)
+                text!(ax, anchor_x, 0.97 - i * 0.08;
+                      text  = latexstring(@sprintf("%+.2f", e.ME), "\\ (", @sprintf("%.2f", e.RMSE),
+                                          ")\\;^\\circ\\mathrm{C}"),
+                      space = :relative, align = (halign, :top), color = e.color, fontsize = 10)
+            end
         end
 
         # Q̄_h / Q̄_U annotation — cumulative mean forcing from day 0 to this day.
