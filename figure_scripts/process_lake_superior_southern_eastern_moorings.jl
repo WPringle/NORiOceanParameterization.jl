@@ -8,9 +8,16 @@
 # 1/15/45 for use by other figure scripts (e.g.
 # plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl).
 #
+# Also regenerates SM's obs re-windowed at the EM's start dates
+# (observed_mld_EManchor.jld2) — the SM column-model experiment starts at the
+# EM's isothermal date rather than SM's own, so comparisons of SM model output
+# against observations day-by-day since simulation start must use this file,
+# not the plain SM observed_mld.jld2 (which is keyed to SM's own isothermal date).
+#
 # Inputs  : Austin2023 hourly .mat files in /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/Austin2023/
 # Outputs : figures/lake_superior_{southern,eastern}_mooring_obs_T_profiles.pdf
 #           figure_data/lake_superior_{southern,eastern}_mooring/observed_mld.jld2
+#           figure_data/lake_superior_southern_mooring/observed_mld_EManchor.jld2
 #####
 
 using MAT
@@ -444,25 +451,9 @@ function process_and_plot(prefix, mooring_name, jld2_subdir, fig_stem;
     end
 end
 
-# ── Run for both mooring types ─────────────────────────────────────────────────
-# EM homogenizes cleanly at 4 °C, so a tight tolerance keeps its ICs right at 4.
-# SM never sits that close to 4 °C while well-mixed; ±0.025 would drop both SM
-# winters, so it uses a looser ±0.05 window.
-process_and_plot("SM", "Southern Mooring",
-                 "lake_superior_southern_mooring",
-                 "lake_superior_southern_mooring"; T4_tol = 0.05)
-
-process_and_plot("EM", "Eastern Mooring",
-                 "lake_superior_eastern_mooring",
-                 "lake_superior_eastern_mooring"; T4_tol = 0.025)
-
-# ── Eastern Mooring obs at the OLD MLD start dates, for LES comparison ─────────
-# The LES runs were initialized on the old MLD dates (…_winter_start_dates_LES.csv),
-# so regenerate a matching obs file (observed_mld_LES.jld2) with the same full
-# format (raw T markers + ADCP speed) but pinned to those dates rather than the
-# re-derived isothermal dates.
+# ── Helper: read a "winter_year,start_date,..." CSV into a Dict ────────────────
 function read_start_dates_csv(csv_file)
-    isfile(csv_file) || (@warn "LES start-date CSV not found: $csv_file"; return nothing)
+    isfile(csv_file) || (@warn "Start-date CSV not found: $csv_file"; return nothing)
     dates = Dict{Int, DateTime}()
     open(csv_file) do io
         readline(io)   # header
@@ -478,6 +469,45 @@ function read_start_dates_csv(csv_file)
     return dates
 end
 
+# ── Run for both mooring types ─────────────────────────────────────────────────
+# EM homogenizes cleanly at 4 °C, so a tight tolerance keeps its ICs right at 4.
+# SM never sits that close to 4 °C while well-mixed; ±0.025 would drop both SM
+# winters, so it uses a looser ±0.05 window.
+process_and_plot("SM", "Southern Mooring",
+                 "lake_superior_southern_mooring",
+                 "lake_superior_southern_mooring"; T4_tol = 0.05)
+
+process_and_plot("EM", "Eastern Mooring",
+                 "lake_superior_eastern_mooring",
+                 "lake_superior_eastern_mooring"; T4_tol = 0.025)
+
+# ── Southern Mooring obs re-windowed at the Eastern Mooring's start dates ──────
+# The SM column-model experiment (lake_superior_southern_mooring_GLEN_forced*.jl)
+# does NOT start at SM's own isothermal date above — its column rarely reaches a
+# clean whole-column isothermal state, so it instead starts at the same wall-clock
+# time as the EM runs (reading lake_superior_eastern_mooring_winter_start_dates.csv
+# as t_iso). The plain SM observed_mld.jld2 above is keyed to SM's own isothermal
+# date instead, which can differ from the EM date by several days (e.g. winter
+# 2010: EM 2009-12-27 vs SM's own 2010-01-03) — comparing the model's day-1/15/45
+# output against those obs would silently compare two different calendar days.
+# Regenerate a second obs file (observed_mld_EManchor.jld2), same schema, with the
+# day-1/15/30/45/60 windows anchored to the EM date instead, for use wherever SM
+# model output is compared against observations day-by-day since simulation start.
+em_csv   = joinpath(@__DIR__, "..", "figure_data", "lake_superior_eastern_mooring",
+                    "lake_superior_eastern_mooring_winter_start_dates.csv")
+em_dates = read_start_dates_csv(em_csv)
+if !isnothing(em_dates)
+    process_and_plot("SM", "Southern Mooring (EM-anchored)",
+                     "lake_superior_southern_mooring",
+                     "lake_superior_southern_mooring";
+                     start_override = em_dates, tag = "_EManchor", write_csv = false)
+end
+
+# ── Eastern Mooring obs at the OLD MLD start dates, for LES comparison ─────────
+# The LES runs were initialized on the old MLD dates (…_winter_start_dates_LES.csv),
+# so regenerate a matching obs file (observed_mld_LES.jld2) with the same full
+# format (raw T markers + ADCP speed) but pinned to those dates rather than the
+# re-derived isothermal dates.
 les_csv   = joinpath(@__DIR__, "..", "figure_data", "lake_superior_eastern_mooring",
                      "lake_superior_eastern_mooring_winter_start_dates_LES.csv")
 les_dates = read_start_dates_csv(les_csv)

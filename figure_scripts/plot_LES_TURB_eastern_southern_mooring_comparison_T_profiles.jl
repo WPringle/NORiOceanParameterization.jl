@@ -3,9 +3,12 @@
 #####
 # One figure per snapshot day since each run's own start date (1, 15, 30, 45, 60).
 # Day-1 panels are useful for inspecting early divergence (e.g. SM 2010). The
-# day-1 observed profile requires observed_mld.jld2 to include Tday1_raw_obs —
+# day-1 observed profile requires observed_mld*.jld2 to include Tday1_raw_obs —
 # regenerate it via process_lake_superior_southern_eastern_moorings.jl; older
 # jld2 files without that field fall back to no obs marker on day-1 panels.
+# SM obs are read from observed_mld_EManchor.jld2 (not the plain observed_mld.jld2)
+# since the SM model run starts at the EM's isothermal date, not SM's own — see
+# the OBS_SM_FILE comment below.
 # Layout: 2 x 4 grid — top row is the eastern mooring winters 2009/2010/2011/2014;
 # bottom row is the legend, southern mooring winters 2010/2011, then the remaining
 # eastern mooring winter 2015. Each panel overlays:
@@ -48,7 +51,7 @@
 #               observed_mld.jld2                                     (obs)
 #           figure_data/lake_superior_southern_mooring/
 #               lake_superior_southern_mooring_winter_start_dates.csv (isothermal dates)
-#               observed_mld.jld2                                     (obs)
+#               observed_mld_EManchor.jld2                            (obs, EM-anchored)
 #           /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
 #               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc  (forcing)
 # Outputs : figures/LES_TURB_eastern_southern_mooring_comparison_T_profiles_day{1,15,30,45,60}_{direct,coare_wind}.pdf
@@ -201,8 +204,13 @@ end
 
 const OBS_EM_FILE = joinpath(@__DIR__, "..", "figure_data",
                              "lake_superior_eastern_mooring", "observed_mld.jld2")
+# SM's plain observed_mld.jld2 is keyed to SM's own isothermal date, but the SM
+# column-model experiment starts at the EM's isothermal date instead (see
+# lake_superior_southern_mooring_GLEN_forced*.jl) — for winter 2010 those two
+# dates are 7 days apart. Use the EM-anchored variant here so "day N since
+# simulation start" on the model curve lines up with "day N" in the obs marker.
 const OBS_SM_FILE = joinpath(@__DIR__, "..", "figure_data",
-                             "lake_superior_southern_mooring", "observed_mld.jld2")
+                             "lake_superior_southern_mooring", "observed_mld_EManchor.jld2")
 obs_em = load_obs(OBS_EM_FILE, "EM")
 obs_sm = load_obs(OBS_SM_FILE, "SM")
 
