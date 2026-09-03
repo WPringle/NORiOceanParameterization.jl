@@ -4,6 +4,9 @@
 # For each mooring type (SM / EM), finds the last isothermal ~4 °C state in
 # Nov–Jan, then extracts and plots temperature profiles at +1 month and +2 months.
 # Each plotted profile is labelled with its winter year.
+# Also extracts (but does not plot here) raw sensor-depth profiles at days
+# 1/15/45 for use by other figure scripts (e.g.
+# plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl).
 #
 # Inputs  : Austin2023 hourly .mat files in /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/Austin2023/
 # Outputs : figures/lake_superior_{southern,eastern}_mooring_obs_T_profiles.pdf
@@ -159,10 +162,12 @@ function process_mat(filepath, dep_common; T4_tol = 0.05, start_override = nothi
     # Daily averages: mean of all hourly obs in [target, target + 1 day)
     target1  = start_dt + Day(30)
     target2  = start_dt + Day(60)
+    targetd1  = start_dt + Day(1)
     targetd15 = start_dt + Day(15)
     targetd45 = start_dt + Day(45)
     idxs1  = findall(dt -> target1  <= dt < target1  + Day(1), datetimes)
     idxs2  = findall(dt -> target2  <= dt < target2  + Day(1), datetimes)
+    idxsd1  = findall(dt -> targetd1  <= dt < targetd1  + Day(1), datetimes)
     idxsd15 = findall(dt -> targetd15 <= dt < targetd15 + Day(1), datetimes)
     idxsd45 = findall(dt -> targetd45 <= dt < targetd45 + Day(1), datetimes)
 
@@ -172,6 +177,10 @@ function process_mat(filepath, dep_common; T4_tol = 0.05, start_override = nothi
     end
     if isempty(idxs2)
         @warn "$(basename(filepath)): no data in [start+60, start+61) days (ends $(datetimes[end]))"
+        return nothing
+    end
+    if isempty(idxsd1)
+        @warn "$(basename(filepath)): no data in [start+1, start+2) days (ends $(datetimes[end]))"
         return nothing
     end
     if isempty(idxsd15)
@@ -185,11 +194,13 @@ function process_mat(filepath, dep_common; T4_tol = 0.05, start_override = nothi
 
     any(any(isnan, T[:, i]) for i in idxs1) && return nothing
     any(any(isnan, T[:, i]) for i in idxs2) && return nothing
+    any(any(isnan, T[:, i]) for i in idxsd1) && return nothing
     any(any(isnan, T[:, i]) for i in idxsd15) && return nothing
     any(any(isnan, T[:, i]) for i in idxsd45) && return nothing
 
     col1   = vec(mean(T[:, idxs1], dims = 2))
     col2   = vec(mean(T[:, idxs2], dims = 2))
+    cold1  = vec(mean(T[:, idxsd1], dims = 2))
     cold15 = vec(mean(T[:, idxsd15], dims = 2))
     cold45 = vec(mean(T[:, idxsd45], dims = 2))
 
@@ -239,7 +250,8 @@ function process_mat(filepath, dep_common; T4_tol = 0.05, start_override = nothi
             d_sort, col1[idx], col2[idx],
             spd_bins_raw, spd1_raw, spd2_raw,
             T[:, last_iso_i][idx],   # raw isothermal (t=0) temps at sensor depths
-            cold15[idx], cold45[idx])   # raw temps at sensor depths, day 15 / day 45
+            cold15[idx], cold45[idx],   # raw temps at sensor depths, day 15 / day 45
+            cold1[idx])   # raw temps at sensor depths, day 1
 end
 
 # ── Helper: collect + deduplicate results for a given file prefix ──────────────
@@ -307,6 +319,7 @@ function process_and_plot(prefix, mooring_name, jld2_subdir, fig_stem;
     T0_raw_obs   = [r[13] for r in results]   # isothermal (t=0) temps at sensor depths
     T15_raw_obs  = [r[14] for r in results]   # temperatures at sensor depths, day 15
     T45_raw_obs  = [r[15] for r in results]   # temperatures at sensor depths, day 45
+    Tday1_raw_obs = [r[16] for r in results]  # temperatures at sensor depths, day 1
 
     # Save
     out_dir = joinpath(@__DIR__, "..", "figure_data", jld2_subdir)
@@ -323,6 +336,7 @@ function process_and_plot(prefix, mooring_name, jld2_subdir, fig_stem;
         T2_profiles,
         dep_raw_obs,
         T0_raw_obs,
+        Tday1_raw_obs,
         T15_raw_obs,
         T1_raw_obs,
         T45_raw_obs,

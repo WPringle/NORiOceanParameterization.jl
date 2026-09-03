@@ -2,9 +2,10 @@
 ##### GLEN-forced Eastern + Southern Mooring — LES vs TURB k-ε temperature comparison
 #####
 # One figure per snapshot day since each run's own start date (1, 15, 30, 45, 60).
-# Day 1 has no observed profile (the mooring processing script only extracts
-# obs at days 15/30/45/60), so day-1 panels show only the model curves and the
-# t=0 initial profile — useful for inspecting early divergence (e.g. SM 2010).
+# Day-1 panels are useful for inspecting early divergence (e.g. SM 2010). The
+# day-1 observed profile requires observed_mld.jld2 to include Tday1_raw_obs —
+# regenerate it via process_lake_superior_southern_eastern_moorings.jl; older
+# jld2 files without that field fall back to no obs marker on day-1 panels.
 # Layout: 2 x 4 grid — top row is the eastern mooring winters 2009/2010/2011/2014;
 # bottom row is the legend, southern mooring winters 2010/2011, then the remaining
 # eastern mooring winter 2015. Each panel overlays:
@@ -167,12 +168,13 @@ end
 function load_obs(obs_file, label)
     isfile(obs_file) || (@warn "$label obs not found ($obs_file) — run process_lake_superior_southern_eastern_moorings.jl first"; return nothing)
     jldopen(obs_file) do f
-        (wys     = Int.(f["winter_years"]),
-         dep_raw = f["dep_raw_obs"],
-         T15_raw = f["T15_raw_obs"],
-         T1_raw  = f["T1_raw_obs"],   # day-30 observed profile
-         T45_raw = f["T45_raw_obs"],
-         T2_raw  = f["T2_raw_obs"])   # day-60 observed profile
+        (wys       = Int.(f["winter_years"]),
+         dep_raw   = f["dep_raw_obs"],
+         Tday1_raw = haskey(f, "Tday1_raw_obs") ? f["Tday1_raw_obs"] : nothing,   # day-1 observed profile
+         T15_raw   = f["T15_raw_obs"],
+         T1_raw    = f["T1_raw_obs"],   # day-30 observed profile
+         T45_raw   = f["T45_raw_obs"],
+         T2_raw    = f["T2_raw_obs"])   # day-60 observed profile
     end
 end
 
@@ -184,10 +186,11 @@ obs_em = load_obs(OBS_EM_FILE, "EM")
 obs_sm = load_obs(OBS_SM_FILE, "SM")
 
 # Observed raw profile (per year) for a given snapshot day.
-obs_profile_for_day(obs, day) = day == 15 ? obs.T15_raw :
-                                 day == 30 ? obs.T1_raw  :
-                                 day == 45 ? obs.T45_raw :
-                                 day == 60 ? obs.T2_raw  : nothing
+obs_profile_for_day(obs, day) = day == 1  ? obs.Tday1_raw :
+                                 day == 15 ? obs.T15_raw   :
+                                 day == 30 ? obs.T1_raw    :
+                                 day == 45 ? obs.T45_raw   :
+                                 day == 60 ? obs.T2_raw    : nothing
 
 winter_years    = [2009, 2010, 2011, 2014, 2015]   # eastern mooring
 winter_years_sm = [2010, 2011]                     # southern mooring
