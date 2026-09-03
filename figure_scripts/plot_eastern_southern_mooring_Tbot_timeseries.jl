@@ -8,16 +8,23 @@
 # two with a TURB run), then the legend. Note that EM winter 2010's deployment
 # never reached the true lake bottom (its deepest sensor is well short of the
 # model's 212 m column) — see process_lake_superior_southern_eastern_moorings.jl
-# and the per-panel recorded site water depth Z values @info-logged near the
-# bottom of this script (for adding to the figure caption), since Z varies by
-# deployment/year/site. Each panel's xlabel spells out its own calendar
-# isothermal-start date ("Days since 2008-12-16") rather than a generic "Days
-# since start", since that date differs by site/year (see the EM-vs-SM
-# Q̄_h/Q̄_U discussion earlier in this conversation). Each panel overlays:
-#   • LES        — bottom-cell Tbar, UVstress                              (black)
+# and the per-panel recorded site water depth Z / deepest-sensor-depth values
+# @info-logged near the bottom of this script (for adding to the figure
+# caption), since both vary by deployment/year/site. Each panel's xlabel spells
+# out its own calendar isothermal-start date ("Days since 2008-12-16") rather
+# than a generic "Days since start", since that date differs by site/year (see
+# the EM-vs-SM Q̄_h/Q̄_U discussion earlier in this conversation). Each panel
+# overlays:
+#   • LES        — Tbar sampled at the observed deepest sensor's own depth      (black)
+#                   (not the grid's bottom cell / Lz — several deployments'
+#                   deepest sensor sits well short of the true lake bottom, so
+#                   sampling at Lz would compare the model against a different
+#                   depth than the sensor actually measures; see
+#                   bottom_Tinsitu_series below)
 #                   (Eastern Mooring only; no LES has been run for the Southern
 #                   Mooring site, so those two panels omit this line)
-#   • k-ε        — bottom-cell Tbar, UVstress + TEOS-10 EOS (the default)  (blue)
+#   • k-ε        — Tbar sampled at the same observed sensor depth as LES        (blue)
+#                   (UVstress + TEOS-10 EOS, the default)
 #   • Analytical model (dashed, purple) — a diagnostic argument for T_bot, evaluated
 #     hourly (not daily) directly from the raw GLEN forcing, with both the
 #     Monin–Obukhov length L_MO *and* the upwelling-longwave correction in Q_T
@@ -227,14 +234,28 @@ function load_glen_forcing_raw(t_iso; ndays = 60)
     end
 end
 
-# ── Model bottom-cell temperature time series ─────────────────────────────────
-# Bottom-cell in-situ temperature (index 1 = deepest cell, matching how the
-# surface-cell index "end" is used elsewhere in these scripts).
-function bottom_Tinsitu_series(fts)
-    zC     = znodes(fts.grid, Center())
-    p_dbar = ρ₀ * g_grav * abs(zC[1]) / 1e4
-    Θ_bot  = [Float64(interior(fts[i])[1, 1, 1]) for i in eachindex(fts.times)]
-    T_bot  = [gsw_t_from_ct(S_lake, Θ, p_dbar) for Θ in Θ_bot]
+# ── Model temperature time series at a given depth ────────────────────────────
+# Sampled at `target_depth` (m, positive down) — the *observed* deepest sensor's
+# own mounting depth, not the model grid's own bottom cell / the site's recorded
+# water depth Z. Several deployments' deepest sensor sits well short of the true
+# lake bottom (e.g. EM winter 2010 — see the note by observed_sensor_series
+# below), so comparing the model's actual bottom cell (near Lz ≈ Z) against that
+# sensor would be comparing two different depths, not a model-vs-obs difference.
+# Linearly interpolated between the two nearest cell centers; `target_depth` is
+# clamped to the grid's own depth range first (Center() nodes run bottom→top, so
+# zC[1] is the deepest cell — matches how the surface-cell index "end" is used
+# elsewhere in these scripts).
+function bottom_Tinsitu_series(fts, target_depth::Real)
+    zC       = znodes(fts.grid, Center())
+    z_target = clamp(-abs(target_depth), zC[1], zC[end])
+    k_lo     = clamp(searchsortedlast(zC, z_target), 1, length(zC) - 1)
+    k_hi     = k_lo + 1
+    frac     = (z_target - zC[k_lo]) / (zC[k_hi] - zC[k_lo])
+    p_dbar   = ρ₀ * g_grav * abs(z_target) / 1e4
+    Θ_bot    = [(1 - frac) * Float64(interior(fts[i])[1, 1, k_lo]) +
+                      frac  * Float64(interior(fts[i])[1, 1, k_hi])
+                for i in eachindex(fts.times)]
+    T_bot    = [gsw_t_from_ct(S_lake, Θ, p_dbar) for Θ in Θ_bot]
     return Float64.(fts.times) ./ 86400.0, T_bot
 end
 
@@ -253,17 +274,18 @@ function apply_known_depth_corrections!(dep, filename)
 end
 
 # ── Observed sensor time series (continuous hourly record) ───────────────────
-# sensor = :bottom (argmax depth) or :surface (argmin depth). Also returns Z,
-# the deployment's own recorded (nominal) total water depth (m) — not the
-# deepest sensor's mounting depth — so callers can report/caption the site's
-# actual water depth for comparison against the model's column depth H. (Z is
-# a more reliable "how deep is it here" number than the deepest sensor's `dep`:
-# e.g. SMS09h.mat's deepest sensor reads deeper than its own file's Z, and
-# EM winter 2010's deployment never sent a sensor anywhere near the bottom.)
+# sensor = :bottom (argmax depth) or :surface (argmin depth). Also returns Z
+# (the deployment's own recorded nominal total water depth, for reporting/
+# captioning against the model's column depth H) and dep_sensor, the *actual*
+# mounting depth of the chosen sensor — used to sample the model's own T field
+# at the same depth (see bottom_Tinsitu_series), since Z and dep_sensor can
+# differ substantially: e.g. SMS09h.mat's deepest sensor reads deeper than its
+# own file's Z, and EM winter 2010's deployment never sent a sensor anywhere
+# near the true bottom.
 t2dt(t::Real) = DateTime(2000, 1, 1) + Millisecond(round(Int64, (t - 730486.0) * 86_400_000.0))
 
 function observed_sensor_series(site, year, t_iso, sensor::Symbol; ndays = 60)
-    isnothing(t_iso) && return (Float64[], Float64[], NaN)
+    isnothing(t_iso) && return (Float64[], Float64[], NaN, NaN)
     for f in sort(readdir(OBS_DIR; join = true))
         isdir(f) || continue
         for fn in sort(readdir(f))
@@ -284,10 +306,10 @@ function observed_sensor_series(site, year, t_iso, sensor::Symbol; ndays = 60)
             idx  = findall(dt -> t_iso <= dt <= t_iso + Day(ndays), dts)
             days = [Dates.value(dts[i] - t_iso) / (1000 * 86400.0) for i in idx]
             Z    = haskey(data, "Z") ? Float64(data["Z"]) : NaN
-            return days, T[sensor_idx, idx], Z
+            return days, T[sensor_idx, idx], Z, dep[sensor_idx]
         end
     end
-    return Float64[], Float64[], NaN
+    return Float64[], Float64[], NaN, NaN
 end
 
 # Linear interpolation of a (days, values) record onto arbitrary query days.
@@ -372,23 +394,29 @@ for (site, year) in PANELS
 
     turb_f = turb_file(site, year)
     les_f  = les_file(site, year)
-    les_days, les_T = if !isnothing(les_f) && isfile(les_f)
-        bottom_Tinsitu_series(FieldTimeSeries(les_f, "Tbar"))
-    else
-        isnothing(les_f) || @warn "Missing LES output: $les_f"
-        (Float64[], Float64[])
-    end
 
     if !isfile(turb_f)
         @warn "Missing k-ε output: $turb_f"
         continue
     end
-    turb_fts          = FieldTimeSeries(turb_f, "Tbar")
-    turb_days, turb_T = bottom_Tinsitu_series(turb_fts)
-    H                 = turb_fts.grid.Lz
+    turb_fts = FieldTimeSeries(turb_f, "Tbar")
+    H        = turb_fts.grid.Lz
 
-    obs_days, obs_T, obs_Z             = observed_sensor_series(site, year, t_iso, :bottom)
-    obs_sfc_days, obs_sfc_T, _         = observed_sensor_series(site, year, t_iso, :surface)
+    obs_days, obs_T, obs_Z, obs_bottom_dep = observed_sensor_series(site, year, t_iso, :bottom)
+    obs_sfc_days, obs_sfc_T, _, _          = observed_sensor_series(site, year, t_iso, :surface)
+
+    # Sample the model fields at the *observed* deepest sensor's own depth, not
+    # the model grid's bottom cell (≈ Lz) or the site's recorded Z — falls back
+    # to H (grid Lz) only if no bottom-sensor observation was found at all.
+    sample_depth = isnan(obs_bottom_dep) ? H : obs_bottom_dep
+
+    turb_days, turb_T = bottom_Tinsitu_series(turb_fts, sample_depth)
+    les_days, les_T = if !isnothing(les_f) && isfile(les_f)
+        bottom_Tinsitu_series(FieldTimeSeries(les_f, "Tbar"), sample_depth)
+    else
+        isnothing(les_f) || @warn "Missing LES output: $les_f"
+        (Float64[], Float64[])
+    end
 
     # Start the analytical model from the *observed* T_bot(0), not a fixed 4 °C —
     # actual starting values vary by site/year (e.g. SM 2010/2011 start at 3.94/3.83
@@ -397,6 +425,8 @@ for (site, year) in PANELS
 
     # Use the deployment's own recorded water depth Z for the analytical model's
     # H (not the model grid's Lz) — falls back to Lz only if Z is unavailable.
+    # Unlike sample_depth above, this is a physical heat-budget depth for the
+    # lumped 0-D model, not a sampling location, so it stays keyed to Z.
     H_analytical = isnan(obs_Z) ? H : obs_Z
 
     model_days, model_T = simple_Tbot_model(t_iso, H_analytical, T_bot0, obs_sfc_days, obs_sfc_T)
@@ -405,18 +435,20 @@ for (site, year) in PANELS
                        turb_days = turb_days, turb_T = turb_T,
                        model_days = model_days, model_T = model_T,
                        obs_days = obs_days, obs_T = obs_T, obs_Z = obs_Z,
-                       H = H, t_iso = t_iso)
+                       obs_bottom_dep = obs_bottom_dep, H = H, t_iso = t_iso)
 end
 isempty(panel_data) && error("No k-ε TURB outputs found for FORCING_SOURCE=$(FORCING_SOURCE)")
 
-# Report the deployment's own recorded water depth Z per panel (alongside the
-# model's water-column depth H, for comparison) so it can be added to the
-# figure caption.
-@info "Recorded site water depth Z per panel (model water-column depth H for comparison):"
+# Report the deployment's own recorded water depth Z and the deepest sensor's
+# own mounting depth per panel (alongside the model's water-column depth H, for
+# comparison) so it can be added to the figure caption — and to make it obvious
+# when a panel's model/LES lines are being sampled well short of the true H.
+@info "Recorded site water depth Z / deepest-sensor depth per panel (model water-column depth H for comparison):"
 for (site, year) in PANELS
     d = get(panel_data, (site.obs_prefix, year), nothing)
     isnothing(d) && continue
-    @info "  $(site.name) Winter $year: Z = $(round(d.obs_Z, digits=1)) m  (model H = $(round(d.H, digits=1)) m)"
+    @info "  $(site.name) Winter $year: Z = $(round(d.obs_Z, digits=1)) m, " *
+          "deepest sensor = $(round(d.obs_bottom_dep, digits=1)) m  (model H = $(round(d.H, digits=1)) m)"
 end
 
 #####
