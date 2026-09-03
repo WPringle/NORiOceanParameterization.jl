@@ -20,7 +20,11 @@
 # up to the figure's snapshot day, plus the dimensionless surface mixing parameter
 # M_sfc(τ) — a time-weighted average of the instantaneous forcing ratio, cumulative
 # from the simulation start (τ = 0) through the snapshot day, that up-weights more
-# recent forcing (see the Msfc section below).
+# recent forcing (see the Msfc section below). Each panel is also annotated,
+# upper-left in the corresponding line color, with the mean error (ME, model −
+# obs) and RMSE of LES and the default k-ε variant against the raw observed
+# sensor-depth temperatures (the other two k-ε variants are omitted to avoid
+# clutter) — see model_obs_stats() below.
 #
 # Inputs  : data/TURB_outputs/eastern_mooring_GLEN_forced/winter<YEAR>/
 #               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling]_winter<YEAR>.jld2  (Tbar)
@@ -302,6 +306,36 @@ panel_profile_turb(dk, d)    = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_TU
 panel_profile_les(dk, d)     = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_LES)
 panel_profile_turb_sm(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_SM)
 
+# ── Model-vs-observation error stats (LES + default k-ε only) ─────────────────
+# Linear interpolation of a model profile (zC ascending, bottom → surface) onto
+# an arbitrary target depth (negative z), clamped to the profile's own ends —
+# same clamping convention as interp_to_common() in the mooring processing script.
+function interp_model_at(zC, Tmodel, ztarget)
+    if ztarget <= zC[1]
+        return Tmodel[1]
+    elseif ztarget >= zC[end]
+        return Tmodel[end]
+    else
+        i = searchsortedlast(zC, ztarget)
+        α = (ztarget - zC[i]) / (zC[i+1] - zC[i])
+        return Tmodel[i] + α * (Tmodel[i+1] - Tmodel[i])
+    end
+end
+
+# Mean error (model − obs) and RMSE of a model profile against the raw observed
+# sensor-depth temperatures (dep_obs positive-down; Tobs may contain NaN for
+# dropped sensors, which are skipped). Returns (ME = NaN, RMSE = NaN) if no
+# valid sensor overlaps.
+function model_obs_stats(zC, Tmodel, dep_obs, Tobs)
+    errs = Float64[]
+    for i in eachindex(dep_obs)
+        isnan(Tobs[i]) && continue
+        push!(errs, interp_model_at(zC, Tmodel, -dep_obs[i]) - Tobs[i])
+    end
+    isempty(errs) && return (ME = NaN, RMSE = NaN)
+    return (ME = mean(errs), RMSE = sqrt(mean(errs .^ 2)))
+end
+
 #####
 ##### Mean forcing per year, cumulative from day 0 to each snapshot day
 #####
@@ -441,6 +475,8 @@ function plot_LES_TURB_profiles(filename, day)
                  yticksize            = 4)
         push!(p.mooring == :EM ? em_axes : sm_axes, ax)
 
+        stats_entries = NamedTuple[]   # (color, ME, RMSE) — LES + default k-ε only
+
         if p.mooring == :EM
             dk_ref = reference_variant(year)
             if !isnothing(dk_ref)
@@ -448,24 +484,42 @@ function plot_LES_TURB_profiles(filename, day)
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
             end
 
+            les_profile = nothing
             if haskey(les_data, year) && day_available(les_data[year], day)
-                lines!(ax, panel_profile_les(les_data[year], day), zC_LES;
+                les_profile = panel_profile_les(les_data[year], day)
+                lines!(ax, les_profile, zC_LES;
                        color = LES_COLOR, linewidth = 2.5)
             end
 
+            v1_profile = nothing
             for (vi, v) in enumerate(VARIANTS)
                 dk = get(variant_data[vi], year, nothing)
                 (isnothing(dk) || !day_available(dk, day)) && continue
-                lines!(ax, panel_profile_turb(dk, day), zC_TURB;
+                profile = panel_profile_turb(dk, day)
+                vi == 1 && (v1_profile = profile)
+                lines!(ax, profile, zC_TURB;
                        color = v.color, linewidth = 2.0, linestyle = v.linestyle)
             end
 
-            obs_T = obs_profile_for_day(obs_em, day)
+            obs_T  = obs_profile_for_day(obs_em, day)
+            wy_idx = nothing
             if !isnothing(obs_em) && !isnothing(obs_T)
                 wy_idx = findfirst(==(year), obs_em.wys)
                 if !isnothing(wy_idx)
                     scatter!(ax, obs_T[wy_idx], -obs_em.dep_raw[wy_idx];
                              color = :firebrick, marker = :circle, markersize = 8)
+                end
+            end
+
+            if !isnothing(wy_idx)
+                dep_o, T_o = obs_em.dep_raw[wy_idx], obs_T[wy_idx]
+                if !isnothing(les_profile)
+                    s = model_obs_stats(zC_LES, les_profile, dep_o, T_o)
+                    isnan(s.ME) || push!(stats_entries, (color = LES_COLOR, ME = s.ME, RMSE = s.RMSE))
+                end
+                if !isnothing(v1_profile)
+                    s = model_obs_stats(zC_TURB, v1_profile, dep_o, T_o)
+                    isnan(s.ME) || push!(stats_entries, (color = VARIANTS[1].color, ME = s.ME, RMSE = s.RMSE))
                 end
             end
 
@@ -477,14 +531,18 @@ function plot_LES_TURB_profiles(filename, day)
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
             end
 
+            v1_profile = nothing
             for (vi, v) in enumerate(VARIANTS)
                 dk = get(variant_data_sm[vi], year, nothing)
                 (isnothing(dk) || !day_available(dk, day)) && continue
-                lines!(ax, panel_profile_turb_sm(dk, day), zC_TURB_SM;
+                profile = panel_profile_turb_sm(dk, day)
+                vi == 1 && (v1_profile = profile)
+                lines!(ax, profile, zC_TURB_SM;
                        color = v.color, linewidth = 2.0, linestyle = v.linestyle)
             end
 
-            obs_T = obs_profile_for_day(obs_sm, day)
+            obs_T  = obs_profile_for_day(obs_sm, day)
+            wy_idx = nothing
             if !isnothing(obs_sm) && !isnothing(obs_T)
                 wy_idx = findfirst(==(year), obs_sm.wys)
                 if !isnothing(wy_idx)
@@ -493,9 +551,25 @@ function plot_LES_TURB_profiles(filename, day)
                 end
             end
 
+            if !isnothing(wy_idx) && !isnothing(v1_profile)
+                dep_o, T_o = obs_sm.dep_raw[wy_idx], obs_T[wy_idx]
+                s = model_obs_stats(zC_TURB_SM, v1_profile, dep_o, T_o)
+                isnan(s.ME) || push!(stats_entries, (color = VARIANTS[1].color, ME = s.ME, RMSE = s.RMSE))
+            end
+
             ylims!(ax, (-Lz_TURB_SM - 5, 5))
         end
         xlims!(ax, T_XLIMS)
+
+        # ME / RMSE (model vs. obs) — upper-left, stacked, one line per model in
+        # that model's own line color. LES first (EM only), then default k-ε.
+        for (i, e) in enumerate(stats_entries)
+            text!(ax, 0.03, 0.97 - (i - 1) * 0.08;
+                  text  = latexstring("\\mathrm{ME}=", @sprintf("%+.2f", e.ME),
+                                      ",\\ \\mathrm{RMSE}=", @sprintf("%.2f", e.RMSE),
+                                      "\\;^\\circ\\mathrm{C}"),
+                  space = :relative, align = (:left, :top), color = e.color, fontsize = 10)
+        end
 
         # Q̄_h / Q̄_U annotation — cumulative mean forcing from day 0 to this day.
         mf_dict = p.mooring == :EM ? mean_forcing : mean_forcing_sm
