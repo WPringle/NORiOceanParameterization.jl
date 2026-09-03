@@ -21,10 +21,13 @@
 # M_sfc(τ) — a time-weighted average of the instantaneous forcing ratio, cumulative
 # from the simulation start (τ = 0) through the snapshot day, that up-weights more
 # recent forcing (see the Msfc section below). Each panel is also annotated,
-# upper-left in the corresponding line color, with the mean error (ME, model −
-# obs) and RMSE of LES and the default k-ε variant against the raw observed
+# along the top in the corresponding line color, with the mean error (ME, model
+# − obs) and RMSE of LES and the default k-ε variant against the raw observed
 # sensor-depth temperatures (the other two k-ε variants are omitted to avoid
-# clutter) — see model_obs_stats() below.
+# clutter) — see model_obs_stats() below. The text anchors left or right
+# depending on the default k-ε (or LES) surface temperature, since the model
+# curves converge near the surface and that puts the open space on the
+# opposite side of the T range.
 #
 # Inputs  : data/TURB_outputs/eastern_mooring_GLEN_forced/winter<YEAR>/
 #               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling]_winter<YEAR>.jld2  (Tbar)
@@ -476,6 +479,8 @@ function plot_LES_TURB_profiles(filename, day)
         push!(p.mooring == :EM ? em_axes : sm_axes, ax)
 
         stats_entries = NamedTuple[]   # (color, ME, RMSE) — LES + default k-ε only
+        les_profile   = nothing
+        v1_profile    = nothing        # default k-ε profile, used for stats + text-side placement
 
         if p.mooring == :EM
             dk_ref = reference_variant(year)
@@ -484,14 +489,12 @@ function plot_LES_TURB_profiles(filename, day)
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
             end
 
-            les_profile = nothing
             if haskey(les_data, year) && day_available(les_data[year], day)
                 les_profile = panel_profile_les(les_data[year], day)
                 lines!(ax, les_profile, zC_LES;
                        color = LES_COLOR, linewidth = 2.5)
             end
 
-            v1_profile = nothing
             for (vi, v) in enumerate(VARIANTS)
                 dk = get(variant_data[vi], year, nothing)
                 (isnothing(dk) || !day_available(dk, day)) && continue
@@ -531,7 +534,6 @@ function plot_LES_TURB_profiles(filename, day)
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
             end
 
-            v1_profile = nothing
             for (vi, v) in enumerate(VARIANTS)
                 dk = get(variant_data_sm[vi], year, nothing)
                 (isnothing(dk) || !day_available(dk, day)) && continue
@@ -561,14 +563,22 @@ function plot_LES_TURB_profiles(filename, day)
         end
         xlims!(ax, T_XLIMS)
 
-        # ME / RMSE (model vs. obs) — upper-left, stacked, one line per model in
-        # that model's own line color. LES first (EM only), then default k-ε.
+        # ME / RMSE (model vs. obs) — stacked along the top, one line per model in
+        # that model's own line color (LES first (EM only), then default k-ε).
+        # Anchored left or right depending on where the surface (z ≈ 0) model
+        # temperature sits in the T range: profiles converge near the surface,
+        # so whichever half of the axis the surface value is far from has the
+        # open space for text without crossing the lines.
+        mid_T     = sum(T_XLIMS) / 2
+        surface_T = !isnothing(v1_profile) ? v1_profile[end] :
+                    !isnothing(les_profile) ? les_profile[end] : nothing
+        anchor_x, halign = isnothing(surface_T) || surface_T > mid_T ? (0.97, :right) : (0.03, :left)
         for (i, e) in enumerate(stats_entries)
-            text!(ax, 0.03, 0.97 - (i - 1) * 0.08;
+            text!(ax, anchor_x, 0.97 - (i - 1) * 0.08;
                   text  = latexstring("\\mathrm{ME}=", @sprintf("%+.2f", e.ME),
                                       ",\\ \\mathrm{RMSE}=", @sprintf("%.2f", e.RMSE),
                                       "\\;^\\circ\\mathrm{C}"),
-                  space = :relative, align = (:left, :top), color = e.color, fontsize = 10)
+                  space = :relative, align = (halign, :top), color = e.color, fontsize = 10)
         end
 
         # Q̄_h / Q̄_U annotation — cumulative mean forcing from day 0 to this day.
