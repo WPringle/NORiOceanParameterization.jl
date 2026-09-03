@@ -18,10 +18,6 @@
 #   • k-ε (unidirectional wind stress) (all wind momentum on the u-stress)    (orange)
 #   • k-ε (No thermobaricity)          (UVstress + full TEOS-10 with Z clamped to 0,  (green)
 #                                        i.e. the exact cabbeling curve, no thermobaricity)
-#   • k-ε (coare_wind_southern forcing) (default k-ε, UVstress + TEOS-10 EOS,   (purple, dash-dot)
-#                                        but forced with the coare_wind_southern
-#                                        flux source) [southern mooring only, fixed
-#                                        regardless of the script's FORCING_SOURCE]
 # against the observed profile, plus the shared initial (day 0) profile as a grey
 # dashed line. Each panel is annotated with the mean forcing (Q̄_h, Q̄_U) from day 0
 # up to the figure's snapshot day, plus the dimensionless surface mixing parameter
@@ -42,7 +38,6 @@
 #               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling]_winter<YEAR>.jld2  (Tbar)
 #           data/TURB_outputs/southern_mooring_GLEN_forced/winter<YEAR>/
 #               kepsilon[_coare_wind][_UVstress][_EOSteos10cabbeling]_winter<YEAR>.jld2  (Tbar)
-#               kepsilon_coare_wind_southern_UVstress_winter<YEAR>.jld2                  (Tbar)
 #           data/LES_outputs/eastern_mooring_GLEN/
 #               LES_GLEN_winter<YEAR>_<forcing>_UVstress_Lxy256_Lz212_Nxy128_Nz106/
 #                   hourly_averaged_timeseries.jld2   (Tbar)
@@ -125,13 +120,6 @@ turb_file(year, uv_tag, eos_tag) = joinpath(TURB_DIR, "winter$(year)",
     "kepsilon$(SRC_TAG)$(uv_tag)$(eos_tag)_winter$(year).jld2")
 turb_file_sm(year, uv_tag, eos_tag) = joinpath(TURB_DIR_SM, "winter$(year)",
     "kepsilon$(SRC_TAG)$(uv_tag)$(eos_tag)_winter$(year).jld2")
-
-# Default k-ε (UVstress, no special EOS tag) forced with "coare_wind_southern" —
-# a forcing source specific to the southern mooring site, fixed regardless of
-# the FORCING_SOURCE/SRC_TAG toggle above (it is neither "direct" nor plain
-# "coare_wind"). Shown as an extra comparison line on SM panels only.
-turb_file_sm_coare_southern(year) = joinpath(TURB_DIR_SM, "winter$(year)",
-    "kepsilon_coare_wind_southern_UVstress_winter$(year).jld2")
 
 # LES output file — the only LES variant available is UV-decomposed wind stress
 # (eastern mooring only — no southern mooring LES runs exist).
@@ -235,12 +223,6 @@ const VARIANTS = [
 const LES_COLOR = :black
 const LES_LABEL = "LES"
 
-# Extra SM-only comparison line: default k-ε forced with "coare_wind_southern"
-# (see turb_file_sm_coare_southern above) — independent of FORCING_SOURCE.
-const COARE_SOUTHERN_COLOR     = :purple4
-const COARE_SOUTHERN_LINESTYLE = :dashdot
-const COARE_SOUTHERN_LABEL     = "k-ε (coare_wind_southern forcing)"
-
 variant_data = [Dict{Int, Dict{String, Any}}() for _ in VARIANTS]
 for (vi, v) in enumerate(VARIANTS)
     for year in winter_years
@@ -269,15 +251,6 @@ for (vi, v) in enumerate(VARIANTS)
     end
 end
 all(isempty, variant_data_sm) && @warn "No southern mooring k-ε TURB outputs found for FORCING_SOURCE=$(FORCING_SOURCE)"
-
-# Southern mooring — fixed coare_wind_southern-forced default k-ε, shown regardless of FORCING_SOURCE.
-coare_southern_data_sm = Dict{Int, Dict{String, Any}}()
-for year in winter_years_sm
-    f = turb_file_sm_coare_southern(year)
-    isfile(f) || (@warn "Missing: $f"; continue)
-    coare_southern_data_sm[year] = Dict("Tbar" => FieldTimeSeries(f, "Tbar"))
-end
-isempty(coare_southern_data_sm) && @warn "No coare_wind_southern-forced SM k-ε outputs found"
 
 # First variant (in VARIANTS order) that has data for this winter — used for the
 # shared initial-condition profile, which is common to all four series.
@@ -579,14 +552,6 @@ function plot_LES_TURB_profiles(filename, day)
                 push!(model_profiles, (color = v.color, zC = zC_TURB_SM, profile = profile))
             end
 
-            dk_cs = get(coare_southern_data_sm, year, nothing)
-            if !isnothing(dk_cs) && day_available(dk_cs, day)
-                profile_cs = panel_profile_turb_sm(dk_cs, day)
-                lines!(ax, profile_cs, zC_TURB_SM;
-                       color = COARE_SOUTHERN_COLOR, linewidth = 2.0, linestyle = COARE_SOUTHERN_LINESTYLE)
-                push!(model_profiles, (color = COARE_SOUTHERN_COLOR, zC = zC_TURB_SM, profile = profile_cs))
-            end
-
             obs_T  = obs_profile_for_day(obs_sm, day)
             wy_idx = nothing
             if !isnothing(obs_sm) && !isnothing(obs_T)
@@ -658,8 +623,6 @@ function plot_LES_TURB_profiles(filename, day)
         push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
         push!(legend_labels, v.label)
     end
-    push!(legend_elems,  LineElement(color = COARE_SOUTHERN_COLOR, linewidth = 2.0, linestyle = COARE_SOUTHERN_LINESTYLE))
-    push!(legend_labels, COARE_SOUTHERN_LABEL * " (SM only)")
     Legend(fig[LEGEND_ROW, LEGEND_COL], legend_elems, legend_labels;
            labelsize = 11, framevisible = false, patchsize = (20, 12), tellwidth = false)
 
