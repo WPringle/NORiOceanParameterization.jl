@@ -1,7 +1,10 @@
 #####
 ##### GLEN-forced Eastern + Southern Mooring — LES vs TURB k-ε temperature comparison
 #####
-# One figure per snapshot day since each run's own start date (15, 30, 45, 60).
+# One figure per snapshot day since each run's own start date (1, 15, 30, 45, 60).
+# Day 1 has no observed profile (the mooring processing script only extracts
+# obs at days 15/30/45/60), so day-1 panels show only the model curves and the
+# t=0 initial profile — useful for inspecting early divergence (e.g. SM 2010).
 # Layout: 2 x 4 grid — top row is the eastern mooring winters 2009/2010/2011/2014;
 # bottom row is the legend, southern mooring winters 2010/2011, then the remaining
 # eastern mooring winter 2015. Each panel overlays:
@@ -33,7 +36,7 @@
 #               observed_mld.jld2                                     (obs)
 #           /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
 #               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc  (forcing)
-# Outputs : figures/LES_TURB_eastern_southern_mooring_comparison_T_profiles_day{15,30,45,60}_{direct,coare_wind}.pdf
+# Outputs : figures/LES_TURB_eastern_southern_mooring_comparison_T_profiles_day{1,15,30,45,60}_{direct,coare_wind}.pdf
 #
 # Usage:
 #   julia plot_LES_TURB_eastern_mooring_comparison_T_profiles.jl               # direct (default)
@@ -299,7 +302,7 @@ panel_profile_turb_sm(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_SM
 #####
 ##### Mean forcing per year, cumulative from day 0 to each snapshot day
 #####
-const DAYS = [15, 30, 45, 60]
+const DAYS = [1, 15, 30, 45, 60]
 
 # M_sfc(τ) = (1/τ²) Σᵢ tᵢ m(Qh_i, QU_i, H) · Δt, tᵢ = day midpoint, Δt = 1 day —
 # the discretized (1/τ²) ∫₀^τ t' m(t') dt', with m() evaluated on daily-mean
