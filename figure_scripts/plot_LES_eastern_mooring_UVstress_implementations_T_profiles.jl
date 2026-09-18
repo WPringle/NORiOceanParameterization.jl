@@ -1,7 +1,7 @@
 #####
-##### GLEN-forced Eastern Mooring — LES UVstress implementation comparison (T only)
+##### GLEN-forced Eastern Mooring — LES UVstress implementation comparison (T only, day 60)
 #####
-# Rows = winter year, columns = day 30 / 45 / 60 snapshots. Every panel overlays
+# One panel per winter year, all at the day-60 snapshot. Every panel overlays
 # four LES implementations, all with the same UV-decomposed (directional) wind
 # stress, against the observed temperature profile (T only):
 #   • UVstress                       — default LES (WENO(order=9) advection,      (full model)  (blue,   solid)
@@ -14,10 +14,22 @@
 # for winters 2009, 2010, 2011, 2014 (direct mostly only has the default
 # implementation, and 2015/coare_wind is missing both SmagorinskyLilly and
 # Cd0.002); missing runs are skipped with a warning rather than filling the panel.
-# The shared initial (day 0) profile is drawn once per panel as a grey dashed line,
-# and the observed profile (day 30 / 45 / 60) is overlaid in its matching column.
-# Each panel is annotated with the mean forcing (Q̄_h, Q̄_U) over the window leading
-# up to its snapshot day: 0–30 days, 30–45 days, or 45–60 days.
+# The shared initial (day 0) profile is drawn once per panel as a grey dashed line.
+# Southern mooring is not included here (no UVstress-implementation LES runs
+# exist for it yet).
+#
+# Each panel is annotated, along the top, with the depth-weighted
+# (trapezoidal-integral) mean error (ME, model − obs) and RMSE of every plotted
+# implementation against the raw observed sensor-depth temperatures — one
+# "value_ME (value_RMSE) °C" row per implementation in that implementation's own
+# line color, under a single unlabeled "ME (RMSE)" header — see
+# model_obs_stats() below. The block anchors left or right depending on the
+# default implementation's surface temperature: profiles converge near the
+# surface, so a *small* surface value means the lines cluster on the left (open
+# space on the right) and a *large* one means they cluster on the right (open
+# space on the left).
+# Each panel is also annotated with the mean forcing (Q̄_h, Q̄_U), cumulative
+# from day 0 through day 60.
 #
 # Inputs  : data/LES_outputs/eastern_mooring_GLEN/
 #               LES_GLEN_winter<YEAR>_<forcing>[_WENO5|_SmagorinskyLilly|_Cd0.002]_UVstress_
@@ -60,6 +72,8 @@ const g_grav    = 9.80665
 const albedo_sw = 0.08     # broadband shortwave albedo (matches experiment)
 const ε_water   = 0.98     # longwave emissivity of water (matches experiment)
 
+const DAY = 60   # only snapshot day shown (SM not available for this comparison)
+
 # Forcing source: "direct" (measured EC fluxes) or "coare_wind".
 const FORCING_SOURCE = length(ARGS) >= 1 ? ARGS[1] : "direct"
 FORCING_SOURCE ∈ ("direct", "coare_wind") ||
@@ -101,7 +115,7 @@ end
 
 # Forcing time series (W/m², m²/s²) over [t_iso, t_iso + ndays], read directly from
 # the gap-filled GLEN NetCDF and reduced exactly as the experiment does.
-function load_glen_forcing(year; ndays = 60)
+function load_glen_forcing(year; ndays = DAY)
     t_iso = read_isothermal_date(CSV_FILE, year)
     (isnothing(t_iso) || !isfile(GLEN_FILE)) && return nothing
     return NCDataset(GLEN_FILE) do ds
@@ -129,24 +143,17 @@ obs_em = if isfile(OBS_EM_FILE)
     jldopen(OBS_EM_FILE) do f
         (wys     = Int.(f["winter_years"]),
          dep_raw = f["dep_raw_obs"],
-         T1_raw  = f["T1_raw_obs"],   # day-30 observed profile
-         T45_raw = f["T45_raw_obs"],
-         T2_raw  = f["T2_raw_obs"])  # day-60 observed profile
+         T2_raw  = f["T2_raw_obs"])   # day-60 observed profile
     end
 else
     @warn "EM obs not found ($OBS_EM_FILE) — run process_lake_superior_southern_eastern_moorings.jl first"
     nothing
 end
 
-# Observed raw profile (per year) for each column's snapshot day.
-obs_profile_for_day(day) = day == 30 ? obs_em.T1_raw  :
-                            day == 45 ? obs_em.T45_raw :
-                            day == 60 ? obs_em.T2_raw  : nothing
-
 winter_years = [2009, 2010, 2011, 2014, 2015]
 
 #####
-##### Load data — the three LES implementations (default UVstress is the full model)
+##### Load data — the four LES implementations (default UVstress is the full model)
 #####
 const VARIANTS = [
     (impl_tag = "",                   color = :steelblue4, label = "LES (default: WENO9, no closure)", linestyle = :solid),
@@ -202,7 +209,7 @@ p_dbar = [ρ₀ * g_grav * abs(z) / 1e4 for z in zC]
 panel_profile(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu)
 
 # First variant (in VARIANTS order) that has data for this winter — used for the
-# shared initial-condition profile, which is common to all three implementations.
+# shared initial-condition profile, which is common to all four implementations.
 function reference_variant(year)
     for vd in variant_data
         haskey(vd, year) && return vd[year]
@@ -210,24 +217,69 @@ function reference_variant(year)
     return nothing
 end
 
-#####
-##### Column configuration — target days, not variables
-#####
-const columns     = [(day = 30, label = "Day 30"), (day = 45, label = "Day 45"), (day = 60, label = "Day 60")]
-const T_XLIMS     = (0.0, 5.0)
-const WINDOW_EDGES = (0, 30, 45, 60)   # column i covers (WINDOW_EDGES[i], WINDOW_EDGES[i+1]] days
+# ── Model-vs-observation error stats (every plotted implementation) ───────────
+# Linear interpolation of a model profile (zC ascending, bottom → surface) onto
+# an arbitrary target depth (negative z), clamped to the profile's own ends —
+# same clamping convention as interp_to_common() in the mooring processing script.
+function interp_model_at(zC, Tmodel, ztarget)
+    if ztarget <= zC[1]
+        return Tmodel[1]
+    elseif ztarget >= zC[end]
+        return Tmodel[end]
+    else
+        i = searchsortedlast(zC, ztarget)
+        α = (ztarget - zC[i]) / (zC[i+1] - zC[i])
+        return Tmodel[i] + α * (Tmodel[i+1] - Tmodel[i])
+    end
+end
 
-# ── Mean forcing per column window, from gap-filled GLEN NetCDF + T_sfc (LW_up) ──
-mean_forcing = Dict{Int, Vector{NamedTuple}}()
-for year in winter_years
-    forcing  = load_glen_forcing(year)
+# Depth-weighted (trapezoidal-integral) mean error (model − obs) and RMSE of a
+# model profile against the raw observed sensor-depth temperatures (dep_obs
+# positive-down; Tobs may contain NaN for dropped sensors, which are skipped).
+# Plain point-wise averaging biases the stats toward whatever depth range
+# happens to have more sensors (usually near the surface); weighting each
+# error by half the distance to its neighboring sensors instead approximates
+#   ME   = ∫ err(z)   dz / ∫ dz
+#   RMSE = √(∫ err(z)² dz / ∫ dz)
+# over the sensor span, so widely- and tightly-spaced sensors count equally
+# per unit depth. Falls back to the single point when only one sensor
+# overlaps (no interval to weight by). Returns (ME = NaN, RMSE = NaN) if no
+# valid sensor overlaps.
+function model_obs_stats(Tmodel, dep_obs, Tobs)
+    valid = .!isnan.(Tobs)
+    any(valid) || return (ME = NaN, RMSE = NaN)
+
+    d   = dep_obs[valid]
+    T   = Tobs[valid]
+    idx = sortperm(d)
+    d   = d[idx]
+    T   = T[idx]
+    errs = [interp_model_at(zC, Tmodel, -d[i]) - T[i] for i in eachindex(d)]
+
+    n = length(d)
+    n == 1 && return (ME = errs[1], RMSE = abs(errs[1]))
+
+    w        = similar(d, Float64)
+    w[1]     = (d[2] - d[1]) / 2
+    w[end]   = (d[end] - d[end - 1]) / 2
+    for i in 2:(n - 1)
+        w[i] = (d[i + 1] - d[i - 1]) / 2
+    end
+    W = sum(w)
+    return (ME = sum(w .* errs) / W, RMSE = sqrt(sum(w .* errs .^ 2) / W))
+end
+
+#####
+##### Mean forcing per year, cumulative from day 0 through day 60
+#####
+function mean_forcing_at(year, day)
+    forcing  = load_glen_forcing(year; ndays = day)
     dk_ref   = reference_variant(year)
     Tbar_fts = isnothing(dk_ref) ? nothing : dk_ref["Tbar"]
 
     if isnothing(forcing) || isnothing(Tbar_fts)
         @warn "No GLEN forcing for winter $year (missing date or NetCDF)"
-        mean_forcing[year] = [(Qh_Wm2 = NaN, QU_m2s2 = NaN) for _ in 1:(length(WINDOW_EDGES) - 1)]
-        continue
+        return (Qh_Wm2 = NaN, QU_m2s2 = NaN)
     end
 
     t_forc  = forcing.t_forc
@@ -251,146 +303,168 @@ for year in winter_years
     end
 
     nanmean(v) = (w = filter(!isnan, v); isempty(w) ? NaN : mean(w))
-    function window_means(t_lo, t_hi)
-        mask = (t_forc .> t_lo * 86400.0) .& (t_forc .<= t_hi * 86400.0)
-        any(mask) || return (NaN, NaN)
-        ts = t_forc[mask]
-        Qh = nanmean(Q_pre[mask] .+ lw_up_at.(ts))
-        QU = nanmean(tau_kin[mask])
-        return (Qh, QU)
-    end
-
-    window_data = NamedTuple[]
-    for i in 1:(length(WINDOW_EDGES) - 1)
-        lo, hi = WINDOW_EDGES[i], WINDOW_EDGES[i+1]
-        Qh, QU = window_means(lo, hi)
-        push!(window_data, (Qh_Wm2 = Qh, QU_m2s2 = QU))
-    end
-    mean_forcing[year] = window_data
+    mask = (t_forc .> 0.0) .& (t_forc .<= day * 86400.0)
+    any(mask) || return (Qh_Wm2 = NaN, QU_m2s2 = NaN)
+    ts = t_forc[mask]
+    Qh = nanmean(Q_pre[mask] .+ lw_up_at.(ts))
+    QU = nanmean(tau_kin[mask])
+    return (Qh_Wm2 = Qh, QU_m2s2 = QU)
 end
 
+mean_forcing = Dict(year => mean_forcing_at(year, DAY) for year in winter_years)
+
 #####
-##### Plotting: rows = winter year, columns = day snapshot
+##### Plotting: 2 x 3 grid — one panel per winter year, day-60 snapshot only,
+##### legend filling the last (unused) panel slot.
 #####
+const NROWS         = 2
+const NCOLS         = 3
+const T_XLIMS       = (0.0, 5.0)
+const T_XTICKS      = 0:1:5
+const T_XMINORTICKS = IntervalsBetween(2)   # unlabelled minor tick every 0.5 °C
+
+# (year, row, col) for every data panel, filled row-major; the legend takes the
+# next slot after the last winter year.
+const PANELS = [(year = y, row = ((i - 1) ÷ NCOLS) + 1, col = ((i - 1) % NCOLS) + 1)
+                for (i, y) in enumerate(winter_years)]
+const LEGEND_ROW, LEGEND_COL = let i = length(winter_years) + 1
+    ((i - 1) ÷ NCOLS) + 1, ((i - 1) % NCOLS) + 1
+end
+
 function plot_LES_T_profiles(filename)
-    Nyears = length(winter_years)
-    Ncols  = length(columns)
+    fig = Figure(size = (220 * NCOLS + 40, 230 * NROWS + 70),
+                 fontsize = 11, figure_padding = (6, 10, 6, 4))
 
-    with_theme(theme_latexfonts()) do
-        fig = Figure(size = (230 * Ncols + 60, 175 * Nyears + 90),
-                     fontsize = 10, figure_padding = (6, 34, 6, 4))
+    axes = Axis[]
+    for p in PANELS
+        year, row, col = p.year, p.row, p.col
+        ax = CairoMakie.Axis(fig[row, col];
+                 title              = "Winter $year",
+                 xlabel             = L"T \; (^\circ\mathrm{C})",
+                 ylabel             = col == 1 ? L"z\;(\mathrm{m})" : "",
+                 ylabelrotation     = π/2,
+                 yticklabelsvisible = col == 1,
+                 xticks             = T_XTICKS,
+                 xminorticks        = T_XMINORTICKS,
+                 xminorticksvisible = true,
+                 xminortickalign    = 0,
+                 xgridvisible       = true,
+                 ygridvisible       = true,
+                 xticksize          = 4,
+                 xminorticksize     = 2.5,
+                 yticksize          = 4)
+        push!(axes, ax)
 
-        for (col, c) in enumerate(columns)
-            Label(fig[1, col], c.label; fontsize = 11, font = :bold,
-                  tellwidth = false, halign = :center)
+        dk_ref = reference_variant(year)
+        if isnothing(dk_ref)
+            text!(ax, 0.5, 0.5; text = "no data", space = :relative,
+                  align = (:center, :center), fontsize = 9, color = :gray)
+            ylims!(ax, (-Lz_EM - 5, 5))
+            xlims!(ax, T_XLIMS)
+            continue
         end
 
-        axes = Matrix{Any}(undef, Nyears, Ncols)
+        # Shared initial profile — single grey dashed line.
+        lines!(ax, panel_profile(dk_ref, 0), zC;
+               color = :gray40, linewidth = 1.5, linestyle = :dash)
 
-        for (row, year) in enumerate(winter_years)
-            dk_ref  = reference_variant(year)
-            for (col, c) in enumerate(columns)
-                ax = CairoMakie.Axis(fig[row + 1, col];
-                         xlabel             = row == Nyears ? L"T \; (^\circ\mathrm{C})" : "",
-                         ylabel             = col == 1 ? L"z\;(\mathrm{m})" : "",
-                         ylabelrotation     = π/2,
-                         xticklabelsvisible = row == Nyears,
-                         yticklabelsvisible = col == 1,
-                         xgridvisible       = true,
-                         ygridvisible       = true,
-                         xticksize          = 4,
-                         yticksize          = 4)
-                axes[row, col] = ax
+        stats_entries  = NamedTuple[]   # (color, ME, RMSE) — every implementation plotted in this panel
+        v1_profile     = nothing        # default implementation's profile, used only for text-side placement
 
-                if isnothing(dk_ref)
-                    text!(ax, 0.5, 0.5; text = "no data", space = :relative,
-                          align = (:center, :center), fontsize = 9, color = :gray)
-                    continue
-                end
-
-                # Shared initial profile — single grey dashed line.
-                lines!(ax, panel_profile(dk_ref, 0), zC;
-                       color = :gray40, linewidth = 1.5, linestyle = :dash)
-
-                # Each of the three LES implementations at this day.
-                for (vi, v) in enumerate(VARIANTS)
-                    haskey(variant_data[vi], year) || continue
-                    dk = variant_data[vi][year]
-                    day_available(dk, c.day) || continue
-                    lines!(ax, panel_profile(dk, c.day), zC;
-                           color = v.color, linewidth = 2.0, linestyle = v.linestyle)
-                end
-
-                ylims!(ax, (-Lz_EM - 5, 5))
-                xlims!(ax, T_XLIMS)
-
-                # Q̄_h / Q̄_U annotation for the window leading up to this column's day.
-                mf = get(mean_forcing, year, nothing)
-                if !isnothing(mf) && !isnan(mf[col].Qh_Wm2)
-                    f = mf[col]
-                    text!(ax, 0.03, 0.11;
-                          text  = latexstring("\\bar{Q}_h = ", round(Int, f.Qh_Wm2), "\\;\\mathrm{W\\,m^{-2}}"),
-                          space = :relative, align = (:left, :bottom), fontsize = 8)
-                    text!(ax, 0.03, 0.03;
-                          text  = latexstring("\\bar{Q}_U = ", sci_latex(f.QU_m2s2), "\\;\\mathrm{m^2\\,s^{-2}}"),
-                          space = :relative, align = (:left, :bottom), fontsize = 8)
-                end
-
-                if col == 1
-                    Label(fig[row + 1, 0], "Winter $year"; fontsize = 10, font = :bold,
-                          rotation = π/2, tellheight = false)
-                end
-            end
+        for (vi, v) in enumerate(VARIANTS)
+            dk = get(variant_data[vi], year, nothing)
+            (isnothing(dk) || !day_available(dk, DAY)) && continue
+            profile = panel_profile(dk, DAY)
+            vi == 1 && (v1_profile = profile)
+            lines!(ax, profile, zC;
+                   color = v.color, linewidth = 2.0, linestyle = v.linestyle)
+            push!(stats_entries, (color = v.color, profile = profile))
         end
 
-        all_axes = filter(x -> x isa Axis, vec(axes))
-        length(all_axes) > 1 && linkyaxes!(all_axes...)
-        length(all_axes) > 1 && linkxaxes!(all_axes...)
+        ylims!(ax, (-Lz_EM - 5, 5))
+        xlims!(ax, T_XLIMS)
 
-        # ── Observations — day 15 / 30 / 45, each in its matching column ─────
-        has_obs = false
+        # Observations — day 60 only.
+        wy_idx = nothing
         if !isnothing(obs_em)
-            for (col, c) in enumerate(columns)
-                obs_T = obs_profile_for_day(c.day)
-                isnothing(obs_T) && continue
-                for (row, year) in enumerate(winter_years)
-                    wy_idx = findfirst(==(year), obs_em.wys)
-                    isnothing(wy_idx) && continue
-                    ax = axes[row, col]
-                    ax isa Axis || continue
-                    scatter!(ax, obs_T[wy_idx], -obs_em.dep_raw[wy_idx];
-                             color = :firebrick, marker = :circle, markersize = 8)
-                    has_obs = true
-                end
+            wy_idx = findfirst(==(year), obs_em.wys)
+            if !isnothing(wy_idx)
+                scatter!(ax, obs_em.T2_raw[wy_idx], -obs_em.dep_raw[wy_idx];
+                         color = :firebrick, marker = :circle, markersize = 8)
             end
         end
 
-        # ── Legend: initial profile, obs, variant colour key ─────────────────
-        legend_elems  = Any[LineElement(color = :gray40, linewidth = 1.5, linestyle = :dash)]
-        legend_labels = Any["t = 0 (initial)"]
-        if has_obs
-            push!(legend_elems,  MarkerElement(color = :firebrick, marker = :circle, markersize = 8))
-            push!(legend_labels, "Observations")
+        # ME (RMSE) (model vs. obs) — stacked along the top under a single "ME
+        # (RMSE)" header, one value line per plotted implementation in that
+        # implementation's own line color. Anchored left or right depending on
+        # where the surface (z ≈ 0) default implementation's temperature sits in
+        # the T range: profiles converge near the surface, so a *small* surface
+        # value means the lines cluster on the left, leaving the open space on
+        # the right (and vice versa).
+        computed_stats = NamedTuple[]
+        if !isnothing(wy_idx)
+            dep_o, T_o = obs_em.dep_raw[wy_idx], obs_em.T2_raw[wy_idx]
+            for e in stats_entries
+                s = model_obs_stats(e.profile, dep_o, T_o)
+                isnan(s.ME) || push!(computed_stats, (color = e.color, ME = s.ME, RMSE = s.RMSE))
+            end
         end
-        for v in VARIANTS
-            push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
-            push!(legend_labels, v.label)
+
+        mid_T     = sum(T_XLIMS) / 2
+        surface_T = !isnothing(v1_profile) ? v1_profile[end] :
+                    !isempty(stats_entries) ? stats_entries[1].profile[end] : nothing
+        anchor_x, halign = isnothing(surface_T) || surface_T > mid_T ? (0.03, :left) : (0.97, :right)
+        if !isempty(computed_stats)
+            text!(ax, anchor_x, 0.97;
+                  text = "ME (RMSE)", space = :relative, align = (halign, :top), fontsize = 10)
+            for (i, e) in enumerate(computed_stats)
+                text!(ax, anchor_x, 0.97 - i * 0.08;
+                      text  = latexstring(@sprintf("%+.2f", e.ME), "\\ (", @sprintf("%.2f", e.RMSE),
+                                          ")\\;^\\circ\\mathrm{C}"),
+                      space = :relative, align = (halign, :top), color = e.color, fontsize = 10)
+            end
         end
-        Legend(fig[Nyears + 2, 1:Ncols], legend_elems, legend_labels;
-               orientation = :horizontal, tellwidth = false, labelsize = 9,
-               framevisible = false, padding = (0, 0, 0, 0), nbanks = 2)
 
-        Label(fig[0, 1:Ncols],
-              "Eastern Mooring — LES UVstress implementations, GLEN-forced ($(FORCING_SOURCE))";
-              fontsize = 11, font = :bold, justification = :center)
-
-        colgap!(fig.layout, 10)
-        rowgap!(fig.layout, 4)
-
-        outfile = joinpath(FIGURE_DIR, filename)
-        save(outfile, fig)
-        @info "Saved → $outfile"
+        # Q̄_h / Q̄_U annotation — cumulative mean forcing from day 0 to day 60.
+        mf = get(mean_forcing, year, nothing)
+        if !isnothing(mf) && !isnan(mf.Qh_Wm2)
+            text!(ax, 0.03, 0.11;
+                  text  = latexstring("\\bar{Q}_h = ", round(Int, mf.Qh_Wm2), "\\;\\mathrm{W\\,m^{-2}}"),
+                  space = :relative, align = (:left, :bottom), fontsize = 10)
+            text!(ax, 0.03, 0.03;
+                  text  = latexstring("\\bar{Q}_U = ", sci_latex(abs(mf.QU_m2s2)), "\\;\\mathrm{m^2\\,s^{-2}}"),
+                  space = :relative, align = (:left, :bottom), fontsize = 10)
+        end
     end
+
+    length(axes) > 1 && linkyaxes!(axes...)
+    length(axes) > 1 && linkxaxes!(axes...)
+
+    # ── Legend: initial profile, obs, variant colour key ─────────────────
+    legend_elems  = Any[LineElement(color = :gray40, linewidth = 1.5, linestyle = :dash),
+                        MarkerElement(color = :firebrick, marker = :circle, markersize = 8)]
+    legend_labels = Any["t = 0 (initial)", "Observations"]
+    for v in VARIANTS
+        push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
+        push!(legend_labels, v.label)
+    end
+    Legend(fig[LEGEND_ROW, LEGEND_COL], legend_elems, legend_labels;
+           labelsize = 11, framevisible = false, patchsize = (20, 12), tellwidth = false)
+
+    Label(fig[0, 1:NCOLS],
+          "Eastern Mooring — LES UVstress implementations, day 60 (GLEN-forced, $(FORCING_SOURCE))";
+          fontsize = 11, font = :bold, justification = :center)
+
+    for col in 1:NCOLS
+        colsize!(fig.layout, col, Relative(1 / NCOLS))
+    end
+
+    colgap!(fig.layout, 10)
+    rowgap!(fig.layout, 6)
+
+    outfile = joinpath(FIGURE_DIR, filename)
+    save(outfile, fig)
+    @info "Saved → $outfile"
 end
 
 #####
