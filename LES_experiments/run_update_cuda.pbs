@@ -1,0 +1,45 @@
+#!/bin/bash
+#PBS -N update_cuda_env
+#PBS -A SAFS
+#PBS -l select=1
+#PBS -l walltime=1:00:00
+#PBS -l filesystems=home:eagle
+#PBS -q debug
+#PBS -o logs/update_cuda_env.out
+#PBS -e logs/update_cuda_env.err
+
+# One-off maintenance job: update CUDA.jl so it supports the node's CUDA-13 driver.
+# The nodes were upgraded to an NVIDIA driver for CUDA 13.0.0, which CUDA.jl 5.5.2
+# refuses ("only supports NVIDIA drivers for CUDA 11.x or 12.x").  Oceananigans
+# (0.95.3) allows any CUDA 5.x, so a plain update to a current 5.x fixes it.
+# Runs on a compute node (login-node precompile hits resource limits).
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy for package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+echo "=== BEFORE: CUDA.jl version ==="
+grep -A1 '^\[\[deps.CUDA\]\]' ${PROJECT_DIR}/Manifest.toml | grep version || true
+
+# Update CUDA (and its resolver-linked deps) to the newest version allowed by the
+# project's compat bounds, then precompile and verify GPU init on this node.
+${JULIA} --project=${PROJECT_DIR} -e '
+    using Pkg
+    Pkg.update("CUDA")
+    Pkg.precompile()
+    using CUDA
+    @info "CUDA.jl version" pkgversion(CUDA)
+    CUDA.versioninfo()
+    @info "CUDA.functional()" CUDA.functional()
+'
+
+echo "=== AFTER: CUDA.jl version ==="
+grep -A1 '^\[\[deps.CUDA\]\]' ${PROJECT_DIR}/Manifest.toml | grep version || true
+echo "Done."

@@ -1,0 +1,60 @@
+#!/bin/bash
+#PBS -N setup_les_env
+#PBS -A SAFS
+#PBS -l select=1
+#PBS -l walltime=1:00:00
+#PBS -l filesystems=home:eagle
+#PBS -q debug
+#PBS -o logs/setup_les_env.out
+#PBS -e logs/setup_les_env.err
+
+# Build a minimal, standalone Julia environment for the LES GPU scripts.
+# Rationale: the main project pins Lux = "=0.5.31", which forces GPUArraysCore
+# 0.1.6 and caps CUDA.jl at 5.5.2 — too old for the nodes' CUDA-13 (driver 580)
+# A100s.  The LES scripts use NONE of the ML stack (no Lux/NNlib/Enzyme), so they
+# get their own env with a current CUDA.jl + the same pinned Oceananigans 0.95.3.
+# Runs on a GPU node so it can verify CUDA.functional() end-to-end.
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
+export LES_ENV=${PROJECT_DIR}/training/les_env
+mkdir -p ${LES_ENV}
+
+# Build the env in its own load path (do NOT inherit the main project).
+export JULIA_LOAD_PATH="@:@stdlib"
+
+${JULIA} -e '
+    using Pkg
+    Pkg.activate(ENV["LES_ENV"])
+    Pkg.add([
+        PackageSpec(name="Oceananigans",        version="0.95.3"),  # match main env / script APIs
+        PackageSpec(name="CUDA"),                                    # latest 5.x → CUDA-13 driver OK
+        PackageSpec(name="NCDatasets"),
+        PackageSpec(name="JLD2"),
+        PackageSpec(name="MAT"),
+        PackageSpec(name="GibbsSeaWater"),
+        PackageSpec(name="SeawaterPolynomials"),
+        PackageSpec(name="ArgParse"),
+        PackageSpec(name="FileIO"),
+    ])
+    Pkg.precompile()
+    println("=== resolved GPU-stack versions ===")
+    for (uuid, info) in Pkg.dependencies()
+        if info.name in ("CUDA","CUDA_Driver_jll","CUDA_Runtime_jll","GPUArrays","GPUArraysCore","Oceananigans","KernelAbstractions")
+            println(rpad(info.name, 20), info.version)
+        end
+    end
+    using CUDA
+    @info "CUDA.jl version" pkgversion(CUDA)
+    CUDA.versioninfo()
+    @info "CUDA.functional()" CUDA.functional()
+'
+
+echo "les_env built at: ${LES_ENV}"
+echo "Done."

@@ -33,28 +33,39 @@
 #   Q_nonsolar = SHF + LHF - LW↓ + LW↑(T_sfc)       [W/m²]
 # LW↑ = ε·σ·T_sfc⁴ is added online from the model surface temperature.
 #
-# Forcing source flag (`direct` | `coare_wind`):
-#   direct      : measured eddy-covariance momentum_flux / sensible_heat_flux /
-#                 latent_heat_flux.
-#   coare_wind  : the *_coare_wind variants — momentum/SHF/LHF re-derived from the
-#                 measured wind speed via the COARE bulk algorithm.
-#   The downwelling SW/LW radiation AND the wind_direction are identical for both
-#   sources (coare_wind only changes the stress magnitude, not its direction).
+# Forcing source flag (`direct` | `coare_wind` | `coare_wind_southern`):
+#   direct               : measured eddy-covariance momentum_flux / sensible_heat_flux /
+#                          latent_heat_flux.
+#   coare_wind           : the *_coare_wind variants — momentum/SHF/LHF re-derived
+#                          from the measured wind speed via the COARE bulk algorithm,
+#                          using the EASTERN Mooring's near-surface temperature.
+#   coare_wind_southern  : the *_coare_wind_southern variants — identical COARE
+#                          bulk algorithm, but driven by the SOUTHERN Mooring's own
+#                          near-surface temperature instead, as a sensitivity check
+#                          on the choice of mooring surface temperature (only
+#                          defined within the Southern Mooring's two valid winter
+#                          windows, 2009/10 and 2010/11 — see fill_fluxes.py).
+#   The downwelling SW/LW radiation AND the wind_direction are identical across all
+#   three sources (the coare_wind* sources only change the stress magnitude, not
+#   its direction).
 #
 # Usage:
 #   julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl <winter_year> [closure_name] [forcing_source]
 #   e.g.  julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl 2010
 #         julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl 2010 CATKE
 #         julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl 2010 CATKE coare_wind
-#         julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl 2010 coare_wind   # all closures
+#         julia lake_superior_southern_mooring_GLEN_forced_UVstress.jl 2010 coare_wind_southern   # all closures
 #
 # Inputs  : figure_data/lake_superior_southern_mooring/
 #               lake_superior_southern_mooring_winter_start_dates.csv
 #           /lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/
-#               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc
+#               US_StannardRockSuperior_processed_halfhourly_qc_gapfilled_wSM.nc
+#               (the "_wSM" gap-filled product carries the *_coare_wind_southern
+#               diagnostics; it is a superset of the plain _gapfilled.nc file —
+#               identical direct/coare_wind fields to floating-point round-off)
 # Outputs : data/TURB_outputs/southern_mooring_GLEN_forced/winter<YEAR>/
-#               <closure>[_coare_wind]_UVstress_winter<YEAR>.jld2      (averaged profiles)
-#               <closure>[_coare_wind]_UVstress_winter<YEAR>_LMO.jld2  (Monin-Obukhov length)
+#               <closure>[_coare_wind[_southern]]_UVstress_winter<YEAR>.jld2      (averaged profiles)
+#               <closure>[_coare_wind[_southern]]_UVstress_winter<YEAR>_LMO.jld2  (Monin-Obukhov length)
 #####
 
 using Oceananigans
@@ -83,7 +94,7 @@ length(ARGS) < 1 &&
     error("Usage: julia $(basename(@__FILE__)) <winter_year> [closure_name] [forcing_source]\n" *
           "  winter_year   : e.g. 2010, 2011\n" *
           "  closure_name  : kepsilon | kepsilon_Rist035 | CATKE | CATKE_highRi  (default: all)\n" *
-          "  forcing_source: direct | coare_wind  (default: direct)")
+          "  forcing_source: direct | coare_wind | coare_wind_southern  (default: direct)")
 
 const winter_year = parse(Int, ARGS[1])
 
@@ -91,13 +102,21 @@ const winter_year = parse(Int, ARGS[1])
 # Parsed inside a function so the assignments are not caught by top-level soft-scope
 # rules (which would silently treat them as loop-locals and ignore the flag).
 function parse_extra_args(extra)
-    forcing_choices = ("direct", "coare", "coare_wind")
+    forcing_choices = Dict(
+        "direct"              => "direct",
+        "coare"               => "coare_wind",
+        "coare_wind"          => "coare_wind",
+        "coare_south"         => "coare_wind_southern",
+        "coare_southern"      => "coare_wind_southern",
+        "coare_wind_south"    => "coare_wind_southern",
+        "coare_wind_southern" => "coare_wind_southern",
+    )
     run_closure    = nothing
     forcing_source = "direct"
     for a in extra
         al = lowercase(strip(a))
-        if al in forcing_choices
-            forcing_source = al == "coare" ? "coare_wind" : al
+        if haskey(forcing_choices, al)
+            forcing_source = forcing_choices[al]
         else
             run_closure = a
         end
@@ -105,9 +124,9 @@ function parse_extra_args(extra)
     return run_closure, forcing_source
 end
 
-const RUN_CLOSURE, FORCING_SOURCE = parse_extra_args(ARGS[2:end])  # closure (or nothing), source
-const SRC_TAG = FORCING_SOURCE == "direct" ? "" : "_coare_wind"    # forcing-source filename tag
-const UV_TAG  = "_UVstress"                                        # directional-stress filename tag
+const RUN_CLOSURE, FORCING_SOURCE = parse_extra_args(ARGS[2:end])         # closure (or nothing), source
+const SRC_TAG = FORCING_SOURCE == "direct" ? "" : "_$(FORCING_SOURCE)"    # forcing-source filename tag
+const UV_TAG  = "_UVstress"                                               # directional-stress filename tag
 @info "Forcing source = $FORCING_SOURCE"
 
 # ── CSV: look up isothermal (start) date ──────────────────────────────────────
@@ -166,14 +185,18 @@ const SW_ZETA2 = 23.0   # m — e-folding depth of the long (visible) band
 
 # ── Load GLEN half-hourly data ────────────────────────────────────────────────
 # Gap-filled product: momentum/heat fluxes are provided directly.  Choose between
-# the measured (`direct`) and COARE-bulk-from-wind (`coare_wind`) flux variants.
-# wind_direction is shared (no *_coare_wind variant): coare_wind changes only the
-# stress magnitude, not its direction.
+# the measured (`direct`), COARE-bulk-from-wind driven by the Eastern Mooring's Tw
+# (`coare_wind`), and the same COARE algorithm driven by the Southern Mooring's own
+# Tw instead (`coare_wind_southern`) flux variants.  wind_direction is shared across
+# all three (the coare_wind* sources only change the stress magnitude, not its
+# direction).  The "_wSM" file carries the *_coare_wind_southern diagnostics; its
+# direct/coare_wind fields are otherwise identical to the plain _gapfilled.nc file
+# to floating-point round-off, so it is used unconditionally here.
 const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
-                  "US_StannardRockSuperior_processed_halfhourly_qc_gapfilled.nc"
+                  "US_StannardRockSuperior_processed_halfhourly_qc_gapfilled_wSM.nc"
 
-# Variable names that differ between the two forcing sources.
-const VAR_SUFFIX = FORCING_SOURCE == "direct" ? "" : "_coare_wind"
+# Variable names that differ between the three forcing sources.
+const VAR_SUFFIX = SRC_TAG
 const LHF_VAR    = "latent_heat_flux"   * VAR_SUFFIX
 const SHF_VAR    = "sensible_heat_flux" * VAR_SUFFIX
 const MOM_VAR    = "momentum_flux"      * VAR_SUFFIX

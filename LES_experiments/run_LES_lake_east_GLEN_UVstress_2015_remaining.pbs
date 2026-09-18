@@ -1,0 +1,63 @@
+#!/bin/bash
+#PBS -N LES_east_GLEN_UVstress_2015_remaining
+#PBS -A SAFS
+#PBS -l select=1
+#PBS -l walltime=24:00:00
+#PBS -l filesystems=home:eagle
+#PBS -q preemptable
+#PBS -o logs/LES_east_GLEN_UVstress_2015_remaining.out
+#PBS -e logs/LES_east_GLEN_UVstress_2015_remaining.err
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy settings for any package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+# Julia setup
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
+
+# Let CUDA.jl use its own artifact-based runtime
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+# Output directory
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output/eastern_mooring_GLEN
+mkdir -p ${OUTPUT_DIR}
+
+# Instantiate project dependencies once before launching experiments
+#${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+
+#####
+##### Eastern mooring, directional (UV-stress), winter 2015 — remaining cases:
+#####   Cd=0.002 (closure none)  and  SmagorinskyLilly (free-slip), one per GPU.
+#####     GPU 0 : Cd=0.002,           direct
+#####     GPU 1 : Cd=0.002,           coare_wind
+#####     GPU 2 : SmagorinskyLilly,   direct
+#####     GPU 3 : SmagorinskyLilly,   coare_wind
+#####
+
+YEAR=2015
+SCRIPT=${PROJECT_DIR}/training/LES_lake_superior_GLEN_UVstress_gpu.jl
+COMMON_ARGS="--Lz 212 --sim_days 60 --file_location ${OUTPUT_DIR}"
+
+CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    ${YEAR} --forcing_source direct     --Cd 0.002 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_direct_Cd0.002_UVstress_${YEAR}.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    ${YEAR} --forcing_source coare_wind --Cd 0.002 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_Cd0.002_UVstress_${YEAR}.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    ${YEAR} --forcing_source direct     --closure SmagorinskyLilly ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_direct_SmagorinskyLilly_UVstress_${YEAR}.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=3 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    ${YEAR} --forcing_source coare_wind --closure SmagorinskyLilly ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_SmagorinskyLilly_UVstress_${YEAR}.log 2>&1 &
+
+echo "Eastern mooring GLEN-forced (UVstress) winter ${YEAR} remaining cases (Cd=0.002, SmagorinskyLilly): 4 launched, waiting..."
+wait
+echo "All experiments finished."

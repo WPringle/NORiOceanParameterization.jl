@@ -1,0 +1,66 @@
+#!/bin/bash
+#PBS -N LES_GLEN_2010_compare
+#PBS -A COMPASS-GLM
+#PBS -l select=1
+#PBS -l walltime=24:00:00
+#PBS -l filesystems=home:eagle
+#PBS -q preemptable
+#PBS -o logs/LES_GLEN_2010_compare.out
+#PBS -e logs/LES_GLEN_2010_compare.err
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy settings for any package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+# Julia setup
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
+
+# Let CUDA.jl use its own artifact-based runtime
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+# Output directory
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output/eastern_mooring_GLEN
+mkdir -p ${OUTPUT_DIR}
+
+# Instantiate project dependencies once before launching experiments
+#${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+
+#####
+##### Winter 2010: 4-way comparison, one case per GPU
+#####   GPU 0 : U-only     stress, direct
+#####   GPU 1 : U-only     stress, coare_wind
+#####   GPU 2 : UVstress (directional), direct
+#####   GPU 3 : UVstress (directional), coare_wind
+##### (No subgrid closure — resolved LES.  Add "--closure <name>" below to change.)
+#####
+
+UV_SCRIPT=${PROJECT_DIR}/training/LES_lake_superior_GLEN_UVstress_gpu.jl
+COMMON_ARGS="--Lz 212 --sim_days 60 --file_location ${OUTPUT_DIR}"
+
+YEAR=2009
+CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${PROJECT_DIR} ${U_SCRIPT} \
+    ${YEAR} --forcing_source direct     ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_UVstress_weno5_${YEAR}.log 2>&1 &
+
+YEAR=2010
+CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${PROJECT_DIR} ${U_SCRIPT} \
+    ${YEAR} --forcing_source coare_wind ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_UVstress_weno5_${YEAR}.log 2>&1 &
+
+YEAR=2011
+CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${PROJECT_DIR} ${UV_SCRIPT} \
+    ${YEAR} --forcing_source direct     ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_UVstress_weno5_${YEAR}.log 2>&1 &
+
+YEAR=2015
+CUDA_VISIBLE_DEVICES=3 ${JULIA} --project=${PROJECT_DIR} ${UV_SCRIPT} \
+    ${YEAR} --forcing_source coare_wind ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_coare_wind_UVstress_weno5_${YEAR}.log 2>&1 &
+
+echo "Winter ${YEAR} comparison (U-only & UVstress × direct & coare_wind): 4 cases launched, waiting..."
+wait
+echo "All experiments finished."

@@ -30,7 +30,6 @@ using Printf
 using Random
 using Statistics
 using ArgParse
-using Glob
 
 import Dates
 
@@ -50,6 +49,10 @@ function parse_commandline()
             help = "Mean surface heat flux (W/m²). Positive = cooling."
             arg_type = Float64
             default = 200.0
+        "--T_insitu"
+            help = "Initial uniform in-situ temperature (°C)"
+            arg_type = Float64
+            default = 4.0
         "--Lz"
             help = "Domain depth (m). Western mooring: 184, Eastern mooring: 212."
             arg_type = Float64
@@ -133,9 +136,7 @@ const g   = 9.80665                     # m/s²
 # Salinity: 0.05 g/kg (Absolute Salinity, nearly zero)
 const S_lake = 0.05  # g/kg
 
-# In-situ temperature at 4 °C, uniform throughout the column.
-# Convert to Conservative Temperature at each depth using TEOS-10.
-const T_insitu = 4.0  # °C
+const T_insitu = args["T_insitu"]  # °C
 
 function Θ_conservative(z::Float64)
     p_dbar = ρ₀ * g * abs(z) / 1e4  # sea pressure [dbar]
@@ -218,7 +219,7 @@ u, v, w = model.velocities
 ##### Output Directory
 #####
 
-FILE_NAME = "LES_lakesuperior_U$(U_wind)ms_QT$(round(Int,Q_mean))_Lxy$(round(Int,Lx))_Lz$(round(Int,Lz))_Nxy$(Nx)_Nz$(Nz)"
+FILE_NAME = "LES_lakesuperior_T0$(T_insitu)C_U$(U_wind)ms_QT$(round(Int,Q_mean))_Lxy$(round(Int,Lx))_Lz$(round(Int,Lz))_Nxy$(Nx)_Nz$(Nz)"
 FILE_DIR  = joinpath(args["file_location"], FILE_NAME)
 mkpath(FILE_DIR)
 
@@ -398,6 +399,12 @@ simulation.output_writers[:timeseries] = JLD2OutputWriter(model, timeseries_outp
                                                           with_halos = true,
                                                           init = init_save_some_metadata!)
 
+simulation.output_writers[:hourly_avg] = JLD2OutputWriter(model, timeseries_outputs,
+                                                          filename = "$(FILE_DIR)/hourly_averaged_timeseries.jld2",
+                                                          schedule = AveragedTimeInterval(1hours),
+                                                          with_halos = true,
+                                                          init = init_save_some_metadata!)
+
 # Checkpoints for restart capability
 simulation.output_writers[:checkpointer] = Checkpointer(model,
     schedule = TimeInterval(args["checkpoint_interval"]days),
@@ -426,11 +433,13 @@ else
     run!(simulation, pickup = pickup_path)
 end
 
-# Clean up checkpoint files after successful completion
-cp_glob = glob("$(FILE_DIR)/model_checkpoint_iteration*.jld2")
-if !isempty(cp_glob)
+# Clean up checkpoint files after successful completion.
+# (Use readdir/filter rather than glob: FILE_DIR may be an absolute path and
+#  Glob.jl rejects patterns that start with "/".)
+cp_cleanup = filter(f -> occursin("model_checkpoint_iteration", f), readdir(FILE_DIR))
+if !isempty(cp_cleanup)
     @info "Removing checkpoint files..."
-    rm.(cp_glob)
+    rm.(joinpath.(FILE_DIR, cp_cleanup))
 end
 
 @info "Simulation completed successfully!"

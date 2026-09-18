@@ -39,8 +39,8 @@ MAX_JOBS=32    # verified safe (8 × ~2.5 GB ≈ 20 GB peak); raise cautiously v
 # (momentum/SHF/LHF re-derived from wind via the COARE bulk algorithm).
 STATUS=0
 #for year in 2009 2010 2011 2014 2015; do
-for year in 2015; do
-#for year in 2009 2010 2011 2014; do
+#for year in 2015; do
+for year in 2009 2010 2011 2014; do
     for closure in kepsilon kepsilon_Rist035 CATKE CATKE_highRi; do
     #for closure in kepsilon; do
         for source in direct coare_wind; do

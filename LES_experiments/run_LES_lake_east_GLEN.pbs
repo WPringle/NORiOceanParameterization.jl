@@ -1,0 +1,72 @@
+#!/bin/bash
+#PBS -N LES_lake_east_GLEN
+#PBS -A SAFS
+#PBS -r y
+#PBS -l select=1
+#PBS -l walltime=24:00:00
+#PBS -l filesystems=home:eagle
+#PBS -q preemptable
+#PBS -o logs/LES_lake_east_GLEN.out
+#PBS -e logs/LES_lake_east_GLEN.err
+
+cd ${PBS_O_WORKDIR}
+mkdir -p logs
+
+# Proxy settings for any package downloads on compute nodes
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+
+# Julia setup
+JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
+
+# Let CUDA.jl use its own artifact-based runtime
+export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
+
+# Output directory
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output/eastern_mooring_GLEN
+mkdir -p ${OUTPUT_DIR}
+
+# Instantiate project dependencies once before launching experiments
+#${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+
+# Forcing source: direct (measured EC) | coare_wind (COARE bulk from wind).
+# Subgrid closure: empty (resolved LES) | SmagorinskyLilly | DynamicSmagorinsky.
+# Override at submission, e.g.:
+#   qsub -v FORCING_SOURCE=coare_wind run_LES_lake_east_GLEN.pbs
+#   qsub -v CLOSURE=DynamicSmagorinsky run_LES_lake_east_GLEN.pbs
+#   qsub -v FORCING_SOURCE=coare_wind,CLOSURE=SmagorinskyLilly run_LES_lake_east_GLEN.pbs
+FORCING_SOURCE=${FORCING_SOURCE:-direct}
+CLOSURE=${CLOSURE:-}
+
+# Only pass --closure when one is requested; build a log/run tag to keep outputs distinct.
+CLOSURE_ARG=""
+[ -n "${CLOSURE}" ] && CLOSURE_ARG="--closure ${CLOSURE}"
+TAG="${FORCING_SOURCE}${CLOSURE:+_${CLOSURE}}"
+
+SCRIPT=${PROJECT_DIR}/training/LES_lake_superior_GLEN_gpu.jl
+COMMON_ARGS="--Lz 212 --sim_days 60 --forcing_source ${FORCING_SOURCE} ${CLOSURE_ARG} --file_location ${OUTPUT_DIR}"
+
+#####
+##### Eastern mooring GLEN-forced: 4 winter years, one per GPU
+#####
+
+CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    2009 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_${TAG}_2009.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    2011 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_${TAG}_2011.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    2014 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_${TAG}_2014.log 2>&1 &
+
+CUDA_VISIBLE_DEVICES=3 ${JULIA} --project=${PROJECT_DIR} ${SCRIPT} \
+    2015 ${COMMON_ARGS} \
+    > logs/LES_lake_east_GLEN_${TAG}_2015.log 2>&1 &
+
+echo "Eastern mooring GLEN-forced (${TAG}): 4 winter years launched, waiting..."
+wait
+echo "All experiments finished."

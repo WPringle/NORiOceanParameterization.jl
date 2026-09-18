@@ -34,7 +34,6 @@ using Random
 using Statistics
 using ArgParse
 using LinearAlgebra
-using Glob
 
 import Dates
 
@@ -574,11 +573,13 @@ else
     run!(simulation)
 end
 
-# Clean up checkpoint files after successful completion
-checkpointers = glob("$(FILE_DIR)/model_checkpoint_iteration*.jld2")
+# Clean up checkpoint files after successful completion.
+# (Use readdir/filter rather than glob: FILE_DIR may be an absolute path and
+#  Glob.jl rejects patterns that start with "/".)
+checkpointers = filter(f -> occursin("model_checkpoint_iteration", f), readdir(FILE_DIR))
 if !isempty(checkpointers)
     @info "Removing checkpoint files..."
-    rm.(checkpointers)
+    rm.(joinpath.(FILE_DIR, checkpointers))
 end
 
 @info "Simulation completed successfully!"

@@ -1,9 +1,9 @@
 #!/bin/bash
 #PBS -N LES_lake_east_U10
-#PBS -A gpu_hack
+#PBS -A SAFS
 #PBS -l select=1
-#PBS -l walltime=12:00:00
-#PBS -l filesystems=home:grand
+#PBS -l walltime=18:00:00
+#PBS -l filesystems=home:eagle
 #PBS -q preemptable
 #PBS -o logs/LES_lake_east_U10.out
 #PBS -e logs/LES_lake_east_U10.err
@@ -17,20 +17,17 @@ export https_proxy="http://proxy.alcf.anl.gov:3128"
 
 # Julia setup
 JULIA=/soft/applications/julia/julia_binaries/julia-1.10/bin/julia
-PROJECT_DIR=/lus/grand/projects/gpu_hack/wpringle/NORiOceanParameterization.jl
+PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_column_model_LES_vs_TURB/NORiOceanParameterization.jl
 
 # Let CUDA.jl use its own artifact-based runtime
 export JULIA_LOAD_PATH="${PROJECT_DIR}:@stdlib"
 
 # Output directory
-OUTPUT_DIR=${PROJECT_DIR}/data/LES_output
+OUTPUT_DIR=${PROJECT_DIR}/data/LES_output/eastern_mooring
 mkdir -p ${OUTPUT_DIR}
 
-# Instantiate project dependencies once before launching experiments
-${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
-
-SCRIPT=${PROJECT_DIR}/training/run_LES_lake_superior_gpu.jl
-COMMON_ARGS="--Lz 212 --stop_time 30 --file_location ${OUTPUT_DIR}"
+SCRIPT=${PROJECT_DIR}/training/LES_lake_superior_gpu.jl
+COMMON_ARGS="--T_insitu 4.0 --Lz 212 --stop_time 60 --file_location ${OUTPUT_DIR}"
 
 #####
 ##### Eastern mooring (Lz=212m), U=10 m/s, 3 cooling rates (one per GPU)
