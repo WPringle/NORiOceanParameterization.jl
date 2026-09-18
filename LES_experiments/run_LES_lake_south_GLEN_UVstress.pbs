@@ -1,11 +1,11 @@
 #!/bin/bash
 #PBS -N LES_lake_south_GLEN_UVstress
-#PBS -A COMPASS-GLM
+#PBS -A SAFS
+#PBS -r y
 #PBS -l select=1
-#PBS -l walltime=01:00:00
+#PBS -l walltime=24:00:00
 #PBS -l filesystems=home:eagle
-###PBS -q preemptable
-#PBS -q debug
+#PBS -q preemptable
 #PBS -o logs/LES_lake_south_GLEN_UVstress.out
 #PBS -e logs/LES_lake_south_GLEN_UVstress.err
 
@@ -23,7 +23,7 @@ PROJECT_DIR=/lus/eagle/projects/COMPASS-GLM/wpringle/Lake_Julia_Runs/V1_lake_col
 # LES scripts run in the standalone les_env (current CUDA.jl for the CUDA-13 driver
 # A100 nodes); the main project's Lux pin caps CUDA at 5.5.2.  Build it once with
 # run_setup_les_env.pbs.
-LES_ENV=${PROJECT_DIR}/training/les_env
+LES_ENV=${PROJECT_DIR}/LES_experiments/les_env
 
 # Let CUDA.jl use its own artifact-based runtime
 export JULIA_LOAD_PATH="${LES_ENV}:@stdlib"
@@ -33,38 +33,38 @@ OUTPUT_DIR=${PROJECT_DIR}/data/LES_output/southern_mooring_GLEN
 mkdir -p ${OUTPUT_DIR}
 
 # Instantiate project dependencies once before launching experiments
-#${JULIA} --project=${PROJECT_DIR} -e 'using Pkg; Pkg.instantiate()'
+#${JULIA} --project=${LES_ENV} -e 'using Pkg; Pkg.instantiate()'
 
 #####
-##### Southern mooring, directional (UV-stress), default closure (none):
-#####   2 winters × 2 forcing sources, one case per GPU.
-#####     GPU 0 : winter 2010, direct
-#####     GPU 1 : winter 2010, coare_wind
-#####     GPU 2 : winter 2011, direct
-#####     GPU 3 : winter 2011, coare_wind
-##### Lz is auto (2010→380 m, 2011→384 m) and the initial condition is the
-##### observed Southern Mooring profile (2010 dep lifted up 20 m).
+##### Southern mooring, directional (UV-stress), both winter years x both
+##### forcing sources (direct, coare_wind) = 4 runs, one per GPU.  No bottom
+##### drag (Cd=0, free-slip), no subgrid closure (resolved LES, WENO9
+##### advection — the script's defaults).  Lz is auto (2010->380 m,
+##### 2011->384 m) and the initial condition is the observed Southern Mooring
+##### profile (2010 dep lifted up 20 m).
 #####
 
-SCRIPT=${PROJECT_DIR}/training/LES_lake_superior_southern_GLEN_UVstress_gpu.jl
+SCRIPT=${PROJECT_DIR}/LES_experiments/LES_lake_superior_southern_GLEN_UVstress_gpu.jl
 COMMON_ARGS="--sim_days 60 --file_location ${OUTPUT_DIR}"
 
-CUDA_VISIBLE_DEVICES=0 ${JULIA} --project=${LES_ENV} ${SCRIPT} \
-    2010 --forcing_source direct     ${COMMON_ARGS} \
-    > logs/LES_lake_south_GLEN_UVstress_direct_2010.log 2>&1 &
+YEARS=(2010 2011)
+SOURCES=(direct coare_wind)
 
-CUDA_VISIBLE_DEVICES=1 ${JULIA} --project=${LES_ENV} ${SCRIPT} \
-    2010 --forcing_source coare_wind ${COMMON_ARGS} \
-    > logs/LES_lake_south_GLEN_UVstress_coare_wind_2010.log 2>&1 &
+GPU=0
+for YEAR in "${YEARS[@]}"; do
+    for SRC in "${SOURCES[@]}"; do
+        CUDA_VISIBLE_DEVICES=${GPU} ${JULIA} --project=${LES_ENV} ${SCRIPT} \
+            ${YEAR} --forcing_source ${SRC} ${COMMON_ARGS} \
+            > logs/LES_lake_south_GLEN_UVstress_${SRC}_${YEAR}.log 2>&1 &
 
-CUDA_VISIBLE_DEVICES=2 ${JULIA} --project=${LES_ENV} ${SCRIPT} \
-    2011 --forcing_source direct     ${COMMON_ARGS} \
-    > logs/LES_lake_south_GLEN_UVstress_direct_2011.log 2>&1 &
+        GPU=$(( (GPU + 1) % 4 ))
+        if [ "${GPU}" -eq 0 ]; then
+            echo "Batch of 4 launched, waiting..."
+            wait
+        fi
+    done
+done
 
-CUDA_VISIBLE_DEVICES=3 ${JULIA} --project=${LES_ENV} ${SCRIPT} \
-    2011 --forcing_source coare_wind ${COMMON_ARGS} \
-    > logs/LES_lake_south_GLEN_UVstress_coare_wind_2011.log 2>&1 &
-
-echo "Southern mooring GLEN-forced (UVstress, closure=none): 2 winters × 2 sources launched, waiting..."
+echo "Waiting for final (partial) batch..."
 wait
-echo "All experiments finished."
+echo "All 4 southern mooring experiments finished."

@@ -21,8 +21,17 @@ Wind stress decomposition:
   (linearly averaging degrees would turn 359° & 1° into 180°).  The stress
   magnitude (momentum_flux) is filled separately as a scalar.
 
-The heat-flux forcing is unchanged:
-  - Net upward heat flux: Q_net = SHF + LHF − SW_net − LW↓ + LW↑(T_sfc)
+Downwelling shortwave radiation penetrates the water column rather than being
+absorbed entirely at the surface: it follows a Paulson & Simpson (1977) two-band
+exponential attenuation profile (Jerlov Type I "clear water" coefficients — see
+the note by SW_R/SW_ZETA1/SW_ZETA2 below), applied as a volumetric `Forcing` on
+temperature (see shortwave_penetration_heating / T_SW_forcing):
+  SW_down(z) = SW_net(0) · [ R·exp(z/ζ1) + (1−R)·exp(z/ζ2) ],  z ≤ 0
+  ∂T/∂t |_SW = (1/ρ₀cₚ) · d(SW_down)/dz
+
+The top temperature flux BC therefore carries only the *non-solar* net heat flux:
+  Q_nonsolar = SHF + LHF − LW↓ + LW↑(T_sfc)       [W/m²]
+LW↑ = ε·σ·T_sfc⁴ is added online from the model surface temperature.
 
 Forcing source flag (`--forcing_source` = direct | coare_wind):
     direct      : measured eddy-covariance momentum_flux / sensible_heat_flux /
@@ -205,9 +214,9 @@ Random.seed!(123)
 ##### CSV: look up isothermal (start) date
 #####
 
-const CSV_FILE = joinpath(@__DIR__, "..", "figure_data",
-    "lake_superior_eastern_mooring",
-    "lake_superior_eastern_mooring_winter_start_dates.csv")
+const CSV_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/NORiOceanParameterization.jl/" *
+                  "figure_data/lake_superior_eastern_mooring/" *
+                  "lake_superior_eastern_mooring_winter_start_dates.csv"
 
 function read_isothermal_date(csv_file, year)
     return open(csv_file) do f
@@ -269,6 +278,16 @@ const ρ_air    = 1.225   # kg/m³ (used to convert momentum flux ↔ u*)
 const albedo_sw = 0.08
 const ε_water   = 0.98
 const σ_SB      = 5.67e-8  # W/(m²·K⁴)
+
+# Paulson & Simpson (1977) two-band shortwave-penetration coefficients (Jerlov Type I
+# "clear water"). Type I is an OCEAN clear-water classification; real lake water is
+# typically more turbid (shorter e-folding depths) than this, so treat the depth
+# distribution of solar heating here as indicative rather than quantitatively tuned
+# to Lake Superior — no lake-specific optical (Secchi-depth) measurements were
+# available when this was written.
+const SW_R     = 0.58   # fraction of SW_net(0) carried by the short (fast-decaying) band
+const SW_ZETA1 = 0.35   # m — e-folding depth of the short band
+const SW_ZETA2 = 23.0   # m — e-folding depth of the long (visible) band
 
 function Θ_conservative(z::Float64)
     p_dbar = ρ₀ * g * abs(z) / 1e4
@@ -398,14 +417,20 @@ wdir_f = @. mod(atand(ex_f, ey_f), 360.0)
 # Simulation time axis: seconds since t_iso
 const t_forcing = Float64[Dates.value(t - t_iso) / 1000.0 for t in glen_t]
 
-# Pre-computed heat flux terms (W/m²), positive upward = lake cooling.
+# Net downwelling shortwave at the surface (after albedo). This is the SOURCE term
+# for the interior penetration profile (T_SW_forcing below) rather than being folded
+# into the surface flux BC.
+#   SW_net(0) = (1 - albedo) · SW↓
+const SW_net_vals = @. (1.0 - albedo_sw) * sw_f
+
+# Pre-computed NON-SOLAR heat flux terms (W/m²), positive upward = lake cooling.
 # LW_up = ε·σ·T_sfc⁴ is excluded here because it depends on the live surface
 # temperature; it is added inside the discrete boundary-condition function below.
-#   SW_net = (1 - albedo) · SW↓
-#   Q_precomp = SHF + LHF - SW_net - LW↓
-const SW_net_vals     = @. (1.0 - albedo_sw) * sw_f
-const Q_precomp_Wm2   = @. shf_f + lhf_f - SW_net_vals - ε_water * lw_f
-const Q_precomp_kin   = @. Q_precomp_Wm2 / (ρ₀ * cₚ)
+# SW is deliberately NOT included here — it enters the model as a volumetric
+# forcing on T (see T_SW_forcing) rather than as part of the top flux BC.
+#   Q_nonsolar = SHF + LHF - LW↓
+const Q_nonsolar_Wm2 = @. shf_f + lhf_f - ε_water * lw_f
+const Q_nonsolar_kin = @. Q_nonsolar_Wm2 / (ρ₀ * cₚ)
 
 # Directional kinematic momentum flux (m²/s²), split into x/y from wind_direction.
 # θ = wind_direction is meteorological (direction wind blows FROM, cw from north);
@@ -421,8 +446,9 @@ const Qv_vals   = @. τ_mag_kin * ey_f
 const ustar_vals = @. sqrt(max(mom_f, 0.0) / ρ_air)
 
 @info "Forcing summary ($(sim_days)-day window):"
-@info "  Q_precomp (W/m²): mean=$(round(mean(Q_precomp_Wm2), digits=1))" *
-      "  min=$(round(minimum(Q_precomp_Wm2), digits=1))  max=$(round(maximum(Q_precomp_Wm2), digits=1))"
+@info "  Q_nonsolar (W/m²): mean=$(round(mean(Q_nonsolar_Wm2), digits=1))" *
+      "  min=$(round(minimum(Q_nonsolar_Wm2), digits=1))  max=$(round(maximum(Q_nonsolar_Wm2), digits=1))"
+@info "  SW_net(0) (W/m²) : mean=$(round(mean(SW_net_vals), digits=1))  max=$(round(maximum(SW_net_vals), digits=1))  (absorbed with depth, not at z=0)"
 @info "  LW_up at 4 °C (W/m²): $(round(ε_water * σ_SB * (4.0 + 273.15)^4, digits=1))  (added online from T_sfc)"
 @info "  u*     (m/s)  : mean=$(round(mean(ustar_vals), digits=4))  max=$(round(maximum(ustar_vals), digits=4))"
 @info "  U_meas (m/s)  : mean=$(round(mean(ws_f), digits=2))  max=$(round(maximum(ws_f), digits=2))"
@@ -461,11 +487,12 @@ end
 ##### Surface Forcing — discrete BCs for 3D NonhydrostaticModel
 #####
 
-# Heat flux: Q_precomp(t) + LW_up(T_sfc), discrete form to access live surface T
+# Heat flux: Q_nonsolar(t) + LW_up(T_sfc), discrete form to access live surface T
+# Full Q = Q_nonsolar(t) + LW_up(T_sfc)   (SW handled separately by T_SW_forcing)
 @inline function Qᵀ_obs(i, j, grid, clock, model_fields, p)
     T_sfc   = @inbounds model_fields.T[i, j, p.Nz]
     LW_up   = p.ε_water * p.σ_SB * (T_sfc + 273.15)^4 / (p.ρ₀ * p.cₚ)
-    return interp_linear(p.t_forcing, p.Q_precomp_kin, Float64(clock.time)) + LW_up
+    return interp_linear(p.t_forcing, p.Q_nonsolar_kin, Float64(clock.time)) + LW_up
 end
 
 # x-momentum flux: time-interpolated Qᵁ (no state dependence; discrete form for consistency)
@@ -476,6 +503,20 @@ end
 # y-momentum flux: time-interpolated Qᵛ
 @inline function Qᵛ_obs(i, j, grid, clock, model_fields, p)
     return interp_linear(p.t_forcing, p.Qv_vals, Float64(clock.time))
+end
+
+# ── Penetrative shortwave forcing ──────────────────────────────────────────────
+# Volumetric heating rate from absorption of the two-band exponential SW profile:
+#   SW_down(z) = SW_net(0) · [ R·exp(z/ζ1) + (1−R)·exp(z/ζ2) ],  z ≤ 0
+#   ∂T/∂t = (1/ρ₀cₚ) · d(SW_down)/dz
+#         = (SW_net(0)/ρ₀cₚ) · [ (R/ζ1)·exp(z/ζ1) + ((1−R)/ζ2)·exp(z/ζ2) ]
+# (Continuous-form Oceananigans Forcing: the grid here has topology (Periodic,
+# Periodic, Bounded), so the full signature func(x, y, z, t, parameters) is
+# required — x, y are unused.)
+@inline function shortwave_penetration_heating(x, y, z, t, p)
+    I0    = interp_linear(p.t_forcing, p.SW_net_vals, Float64(t))
+    dI_dz = I0 * ( (p.R / p.ζ1) * exp(z / p.ζ1) + ((1 - p.R) / p.ζ2) * exp(z / p.ζ2) )
+    return dI_dz / (p.ρ₀ * p.cₚ)
 end
 
 # Quadratic bottom drag: τ = -Cd*|u|*u (and v analogue), using the near-bed (k=1)
@@ -495,17 +536,24 @@ end
     return -p.Cd * v1 * sqrt(u1^2 + v1^2)
 end
 
-const t_forcing_gpu     = CuArray(t_forcing)
-const Q_precomp_kin_gpu = CuArray(Q_precomp_kin)
-const Qu_vals_gpu       = CuArray(Qu_vals)
-const Qv_vals_gpu       = CuArray(Qv_vals)
+const t_forcing_gpu      = CuArray(t_forcing)
+const Q_nonsolar_kin_gpu = CuArray(Q_nonsolar_kin)
+const SW_net_vals_gpu    = CuArray(SW_net_vals)
+const Qu_vals_gpu        = CuArray(Qu_vals)
+const Qv_vals_gpu        = CuArray(Qv_vals)
 
 T_bcs = FieldBoundaryConditions(
             top = FluxBoundaryCondition(Qᵀ_obs,
                       discrete_form = true,
                       parameters = (; t_forcing = t_forcing_gpu,
-                                      Q_precomp_kin = Q_precomp_kin_gpu,
+                                      Q_nonsolar_kin = Q_nonsolar_kin_gpu,
                                       Nz, ρ₀, cₚ, ε_water, σ_SB)))
+
+const T_SW_forcing = Forcing(shortwave_penetration_heating,
+                              parameters = (; t_forcing = t_forcing_gpu,
+                                              SW_net_vals = SW_net_vals_gpu,
+                                              R = SW_R, ζ1 = SW_ZETA1, ζ2 = SW_ZETA2,
+                                              ρ₀, cₚ))
 
 u_bottom_bc = Cd > 0 ? FluxBoundaryCondition(u_bottom_drag, discrete_form = true, parameters = (; Cd)) : nothing
 v_bottom_bc = Cd > 0 ? FluxBoundaryCondition(v_bottom_drag, discrete_form = true, parameters = (; Cd)) : nothing
@@ -546,6 +594,7 @@ model = NonhydrostaticModel(
     tracers            = (:T),
     timestepper        = :RungeKutta3,
     advection          = WENO(order = WENO_ORDER),
+    forcing            = (; T = T_SW_forcing),
     boundary_conditions = (T = T_bcs, u = u_bcs, v = v_bcs),
 )
 
@@ -728,9 +777,12 @@ jldopen(forcing_file, "w") do f
     f["t_iso"]           = string(t_iso)
     f["forcing_source"]  = FORCING_SOURCE
     f["t_forcing"]       = t_forcing
-    f["Q_precomp_Wm2"]   = Q_precomp_Wm2
-    f["Q_precomp_kin"]   = Q_precomp_kin
+    f["Q_nonsolar_Wm2"]  = Q_nonsolar_Wm2
+    f["Q_nonsolar_kin"]  = Q_nonsolar_kin
     f["SW_net_vals"]     = SW_net_vals
+    f["SW_R"]            = SW_R
+    f["SW_ZETA1"]        = SW_ZETA1
+    f["SW_ZETA2"]        = SW_ZETA2
     f["mom_flux"]        = mom_f
     f["ustar_vals"]      = ustar_vals
     f["tau_mag_kin"]     = τ_mag_kin
