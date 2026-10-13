@@ -124,8 +124,15 @@ turb_file_sm(year, uv_tag, eos_tag) = joinpath(TURB_DIR_SM, "winter$(year)",
 
 # LES output file — the only LES variant available is UV-decomposed wind stress
 # (eastern mooring only — no southern mooring LES runs exist).
-les_file(year) = joinpath(LES_DIR,
-    "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress_$(LES_STEM)", "hourly_averaged_timeseries.jld2")
+# Use dynamic lookup to handle variable grid dimensions across years
+function les_file(year)
+    for dir in readdir(LES_DIR, join=true)
+        if isdir(dir) && contains(dir, "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress")
+            return joinpath(dir, "hourly_averaged_timeseries.jld2")
+        end
+    end
+    return joinpath(LES_DIR, "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress_$(LES_STEM)", "hourly_averaged_timeseries.jld2")
+end
 
 # ── GLEN forcing file + isothermal (winter start) dates ───────────────────────
 const GLEN_FILE = "/lcrc/project/HSOFS_Ensemble/COMPASS_GLM/GLEN/" *
@@ -242,6 +249,25 @@ for year in winter_years
 end
 isempty(les_data) && @warn "No LES outputs found for FORCING_SOURCE=$(FORCING_SOURCE)"
 
+# Southern mooring LES — use dynamic lookup like EM.
+function les_file_sm(year)
+    les_dir_sm = joinpath(@__DIR__, "..", "data", "LES_outputs", "southern_mooring_GLEN")
+    for dir in readdir(les_dir_sm, join=true)
+        if isdir(dir) && contains(dir, "LES_GLEN_southern_winter$(year)_$(FORCING_SOURCE)_UVstress")
+            return joinpath(dir, "hourly_averaged_timeseries.jld2")
+        end
+    end
+    return nothing
+end
+
+les_data_sm = Dict{Int, Dict{String, Any}}()
+for year in winter_years_sm
+    f = les_file_sm(year)
+    (isnothing(f) || !isfile(f)) && continue
+    les_data_sm[year] = Dict("Tbar" => FieldTimeSeries(f, "Tbar"))
+end
+isempty(les_data_sm) && @warn "No southern mooring LES outputs found for FORCING_SOURCE=$(FORCING_SOURCE)"
+
 # Southern mooring — same k-ε variants, no LES counterpart.
 variant_data_sm = [Dict{Int, Dict{String, Any}}() for _ in VARIANTS]
 for (vi, v) in enumerate(VARIANTS)
@@ -287,6 +313,10 @@ end
 zC_TURB_SM    = isnothing(ref_turb_sm) ? Float64[] : znodes(ref_turb_sm.grid, Center())
 const Lz_TURB_SM = isnothing(ref_turb_sm) ? Lz_TURB : ref_turb_sm.grid.Lz
 
+ref_les_sm = isempty(les_data_sm) ? nothing : first(values(les_data_sm))["Tbar"]
+zC_LES_SM      = isnothing(ref_les_sm) ? Float64[] : znodes(ref_les_sm.grid, Center())
+const Lz_LES_SM = isnothing(ref_les_sm) ? Lz_TURB_SM : ref_les_sm.grid.Lz
+
 # ── Daily-averaging helper (times taken from each field's own record) ─────────
 function daily_avg_profile(fts, target_day, transform)
     td = fts.times ./ 86400.0
@@ -304,7 +334,11 @@ end
 function day_available(dk, d)
     d == 0 && return true
     td = dk["Tbar"].times ./ 86400.0
-    return any(t -> d <= t < d + 1.0, td)
+    isempty(td) && return false
+    any(t -> d <= t < d + 1.0, td) && return true
+    # Some runs end just short of the target day (e.g. 59.96 instead of 60.0);
+    # fall back to the nearest snapshot, matching daily_avg_profile's own fallback.
+    return minimum(abs.(td .- d)) < 1.0
 end
 
 # Conservative Temperature → in-situ temperature, specific to each grid's pressure.
@@ -315,10 +349,27 @@ end
 const Θ_to_Tinsitu_TURB = make_T_converter(zC_TURB)
 const Θ_to_Tinsitu_LES  = isempty(zC_LES) ? nothing : make_T_converter(zC_LES)
 const Θ_to_Tinsitu_SM   = isempty(zC_TURB_SM) ? nothing : make_T_converter(zC_TURB_SM)
+const Θ_to_Tinsitu_LES_SM = isempty(zC_LES_SM) ? nothing : make_T_converter(zC_LES_SM)
 
 panel_profile_turb(dk, d)    = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_TURB)
 panel_profile_les(dk, d)     = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_LES)
 panel_profile_turb_sm(dk, d) = daily_avg_profile(dk["Tbar"], d, Θ_to_Tinsitu_SM)
+
+function panel_profile_les_sm(dk, d, year)
+    # Get the profile from this year's LES grid
+    fts = dk["Tbar"]
+    zC_local = znodes(fts.grid, Center())
+    converter = make_T_converter(zC_local)
+    profile = daily_avg_profile(fts, d, converter)
+    return profile
+end
+
+function get_les_sm_z_for_year(year)
+    f = les_file_sm(year)
+    (isnothing(f) || !isfile(f)) && return Float64[]
+    fts = FieldTimeSeries(f, "Tbar")
+    return znodes(fts.grid, Center())
+end
 
 # ── Model-vs-observation error stats (every plotted model line) ───────────────
 # Linear interpolation of a model profile (zC ascending, bottom → surface) onto
@@ -565,6 +616,14 @@ function plot_LES_TURB_profiles(filename, day)
                        color = :gray40, linewidth = 1.5, linestyle = :dash)
             end
 
+            if haskey(les_data_sm, year) && day_available(les_data_sm[year], day)
+                les_profile = panel_profile_les_sm(les_data_sm[year], day, year)
+                zC_les_year = get_les_sm_z_for_year(year)
+                lines!(ax, les_profile, zC_les_year;
+                       color = LES_COLOR, linewidth = 2.5)
+                push!(model_profiles, (color = LES_COLOR, zC = zC_les_year, profile = les_profile))
+            end
+
             for (vi, v) in enumerate(VARIANTS)
                 dk = get(variant_data_sm[vi], year, nothing)
                 (isnothing(dk) || !day_available(dk, day)) && continue
@@ -641,7 +700,7 @@ function plot_LES_TURB_profiles(filename, day)
     legend_elems  = Any[LineElement(color = :gray40, linewidth = 1.5, linestyle = :dash),
                         MarkerElement(color = :firebrick, marker = :circle, markersize = 8),
                         LineElement(color = LES_COLOR, linewidth = 2.5)]
-    legend_labels = Any["t = 0 (initial)", "Observations", LES_LABEL * " (EM only)"]
+    legend_labels = Any["t = 0 (initial)", "Observations", LES_LABEL]
     for v in VARIANTS
         push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
         push!(legend_labels, v.label)
