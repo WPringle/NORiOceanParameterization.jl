@@ -34,8 +34,8 @@ depth_lake[depth_lake .>= 0.0] .= NaN   # land/above-surface → NaN
 # ── Station coordinates ────────────────────────────────────────────────────────
 stations = [
     (lon = -87.225,      lat = 47.18361, label = "Stannard Rock",   marker = :star5,  color = :darkorange),
-    (lon = -86.573333,   lat = 47.53667, label = "Eastern Mooring", marker = :circle, color = :gold),
-    (lon = -86.666667,   lat = 47.03333, label = "Southern Mooring",marker = :circle, color = :plum),
+    (lon = -86.573333,   lat = 47.53667, label = "Eastern Mooring (H = 212 m)", marker = :circle, color = :gold),
+    (lon = -86.666667,   lat = 47.03333, label = "Southern Mooring (H = 384 m)",marker = :circle, color = :plum),
 ]
 
 # ── Figure ─────────────────────────────────────────────────────────────────────
