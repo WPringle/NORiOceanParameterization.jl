@@ -141,7 +141,7 @@ const EM_SITE = MooringSite(
 const SM_SITE = MooringSite(
     "Southern",
     joinpath(@__DIR__, "..", "data", "TURB_outputs", "southern_mooring_GLEN_forced"),
-    nothing,
+    joinpath(@__DIR__, "..", "data", "LES_outputs", "southern_mooring_GLEN"),
     EM_CSV_FILE,
     "SM")
 
@@ -154,9 +154,26 @@ const PANELS = [(site = EM_SITE, year = 2009), (site = EM_SITE, year = 2010),
 
 turb_file(site, year, uv_tag, eos_tag) = joinpath(site.turb_dir, "winter$(year)",
     "kepsilon$(SRC_TAG)$(uv_tag)$(eos_tag)_winter$(year).jld2")
-les_file(site, year)  = isnothing(site.les_dir) ? nothing :
-    joinpath(site.les_dir, "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress_$(LES_STEM)",
-             "hourly_averaged_timeseries.jld2")
+
+function les_file(site, year)
+    if isnothing(site.les_dir)
+        return nothing
+    end
+    # For Southern Mooring, grid dimensions vary by year, so we need to search for the dir
+    if site.obs_prefix == "SM"
+        # Search for matching directory pattern
+        for dir in readdir(site.les_dir, join=true)
+            if isdir(dir) && contains(dir, "LES_GLEN_southern_winter$(year)_$(FORCING_SOURCE)_UVstress")
+                return joinpath(dir, "hourly_averaged_timeseries.jld2")
+            end
+        end
+        return nothing
+    else
+        # For Eastern Mooring, use fixed grid dimensions
+        return joinpath(site.les_dir, "LES_GLEN_winter$(year)_$(FORCING_SOURCE)_UVstress_$(LES_STEM)",
+                       "hourly_averaged_timeseries.jld2")
+    end
+end
 
 # k-ε variants overlaid on every panel — matches the VARIANTS list in
 # plot_LES_TURB_eastern_southern_mooring_comparison_T_profiles.jl (same files,
@@ -369,7 +386,7 @@ end
 
 function simple_Tbot_model(t_iso, H, T_bot0, obs_sfc_days, obs_sfc_T; ndays = 60)
     t_glen_days, Q_precomp_Wm2, Qu, Qv = load_glen_forcing_raw(t_iso; ndays)
-    (isempty(t_glen_days) || isempty(obs_sfc_days)) && return (Float64[], Float64[])
+    (isempty(t_glen_days) || isempty(obs_sfc_days)) && return (Float64[], Float64[], Bool[])
 
     # Evaluate hourly (not at the GLEN record's native half-hourly cadence) —
     # matches the model/obs Tbar cadence and is plenty to resolve wind gusts
@@ -396,9 +413,10 @@ function simple_Tbot_model(t_iso, H, T_bot0, obs_sfc_days, obs_sfc_T; ndays = 60
         -Qmag[i]^1.5 / (κ_vonK * α_obs_sfc[i] * g_grav * QT[i])
     end
 
-    integrand = QT .* [mixed_to_bottom(L_MO[i], QT[i], H) ? 1.0 : 0.0 for i in eachindex(L_MO)]
+    heaviside_is_one = [mixed_to_bottom(L_MO[i], QT[i], H) for i in eachindex(L_MO)]
+    integrand = QT .* heaviside_is_one
     T_bot     = T_bot0 .- cumtrapz(t_sec, integrand) ./ H
-    return t_days, T_bot
+    return t_days, T_bot, .!heaviside_is_one
 end
 
 #####
@@ -468,12 +486,12 @@ for (site, year) in PANELS
     # lumped 0-D model, not a sampling location, so it stays keyed to Z.
     H_analytical = isnan(obs_Z) ? H : obs_Z
 
-    model_days, model_T = simple_Tbot_model(t_iso, H_analytical, T_bot0, obs_sfc_days, obs_sfc_T)
+    model_days, model_T, heaviside_zero = simple_Tbot_model(t_iso, H_analytical, T_bot0, obs_sfc_days, obs_sfc_T)
 
     panel_data[key] = (les_days = les_days, les_T = les_T,
                        turb_days = turb_days, turb_T = turb_T,
                        variant_series = variant_series,
-                       model_days = model_days, model_T = model_T,
+                       model_days = model_days, model_T = model_T, heaviside_zero = heaviside_zero,
                        obs_days = obs_days, obs_T = obs_T, obs_Z = obs_Z,
                        obs_bottom_dep = obs_bottom_dep, H = H, t_iso = t_iso)
 end
@@ -535,8 +553,18 @@ function plot_Tbot_timeseries(filename)
             vdays, vT = d.variant_series[vi]
             !isempty(vdays) && lines!(ax, vdays, vT; color = v.color, linewidth = 2.0, linestyle = v.linestyle)
         end
-        !isempty(d.model_days) && lines!(ax, d.model_days, d.model_T;
-                                          color = :purple, linewidth = 2.0, linestyle = :dash)
+        if !isempty(d.model_days)
+            lines!(ax, d.model_days, d.model_T;
+                   color = :purple, linewidth = 2.0, linestyle = :solid)
+            # Mark times when Heaviside function is 0 (no cooling predicted)
+            if length(d.heaviside_zero) == length(d.model_days)
+                zero_indices = findall(d.heaviside_zero)
+                if !isempty(zero_indices)
+                    scatter!(ax, d.model_days[zero_indices], d.model_T[zero_indices];
+                            color = :black, markersize = 5, marker = '·')
+                end
+            end
+        end
 
         xlims!(ax, (0.0, 60.0))
     end
@@ -551,7 +579,7 @@ function plot_Tbot_timeseries(filename)
         push!(legend_elems,  LineElement(color = v.color, linewidth = 2.0, linestyle = v.linestyle))
         push!(legend_labels, v.label)
     end
-    push!(legend_elems,  LineElement(color = :purple, linewidth = 2.0, linestyle = :dash))
+    push!(legend_elems,  LineElement(color = :purple, linewidth = 2.0, linestyle = :solid))
     push!(legend_labels, "Analytical model")
     Legend(fig[2, 4], legend_elems, legend_labels;
            tellwidth = false, labelsize = 11, framevisible = false, padding = (0, 0, 0, 0))
