@@ -10,10 +10,10 @@
 #   • SmagorinskyLilly_UVstress      — explicit Smagorinsky–Lilly subgrid closure  (simplified)  (green,  dotted)
 #   • Cd0.002_UVstress               — default LES but with the surface drag       (simplified)  (purple, dash-dot)
 #                                        coefficient fixed at Cd = 0.002
-# This 4-way comparison is only available for FORCING_SOURCE=coare_wind, and only
-# for winters 2009, 2010, 2011, 2014 (direct mostly only has the default
-# implementation, and 2015/coare_wind is missing both SmagorinskyLilly and
-# Cd0.002); missing runs are skipped with a warning rather than filling the panel.
+# This 4-way comparison is only available for FORCING_SOURCE=coare_wind, now
+# for all five winters (2009, 2010, 2011, 2014, 2015); direct only has the
+# default implementation. Missing runs are skipped with a warning rather than
+# filling the panel.
 # The shared initial (day 0) profile is drawn once per panel as a grey dashed line.
 # Southern mooring is not included here (no UVstress-implementation LES runs
 # exist for it yet).
@@ -196,10 +196,16 @@ function daily_avg_profile(fts, target_day, transform)
     return mean([transform(Float64.(interior(fts[i], 1, 1, :))) for i in idxs])
 end
 
+const DAY_TOL = 0.25   # grace period (days) for a run's last output falling
+                        # just short of the target day (some runs' final
+                        # hourly write lands ~1h early, e.g. t = 59.958 for a
+                        # nominal 60-day run) — daily_avg_profile's own
+                        # nearest-sample fallback then picks that last sample.
 function day_available(dk, d)
     d == 0 && return true
     td = dk["Tbar"].times ./ 86400.0
-    return any(t -> d <= t < d + 1.0, td)
+    any(t -> d <= t < d + 1.0, td) && return true
+    return maximum(td) >= d - DAY_TOL
 end
 
 # Conservative Temperature → in-situ temperature (matches the LES / TURB figures)
@@ -452,7 +458,7 @@ function plot_LES_T_profiles(filename)
            labelsize = 11, framevisible = false, patchsize = (20, 12), tellwidth = false)
 
     Label(fig[0, 1:NCOLS],
-          "Eastern Mooring — LES UVstress implementations, day 60 (GLEN-forced, $(FORCING_SOURCE))";
+          "Eastern Mooring — LES variations, day 60 (GLEN-forced, $(FORCING_SOURCE))";
           fontsize = 11, font = :bold, justification = :center)
 
     for col in 1:NCOLS
