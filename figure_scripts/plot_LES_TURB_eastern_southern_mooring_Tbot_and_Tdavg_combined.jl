@@ -554,7 +554,7 @@ end
 function plot_combined_Tbot_Tdavg()
     panel_data = load_combined_data()
 
-    fig = Figure(size = (195 * 4 + 40, 210 * 4 + 180), fontsize = 11,
+    fig = Figure(size = (195 * 4 + 40, 170 * 4 + 140), fontsize = 11,
                  figure_padding = (6, 10, 6, 4))
 
     positions = [(1, 1), (1, 2), (1, 3), (1, 4), (2, 1), (2, 2), (2, 3)]
@@ -620,14 +620,14 @@ function plot_combined_Tbot_Tdavg()
     Legend(fig[2, 4], legend_elems_tbot, legend_labels_tbot;
            tellwidth = false, labelsize = 11, framevisible = false, padding = (0, 0, 0, 0))
 
-    Label(fig[0, 1:4], "T_bot"; color = :steelblue4, font = :bold, fontsize = 14,
+    Label(fig[0, 1:4], L"\mathbf{T_{bot}}"; color = :steelblue4, font = :bold, fontsize = 16,
           halign = :center, padding = (0, 0, 0, 2))
 
-    # ── T_davg section (rows 3-4) ─────────────────────────────────────────
+    # ── T_davg section (rows 4-5) ─────────────────────────────────────────
 
     axes_tdavg = Axis[]
     for (i, (site, year)) in enumerate(PANELS)
-        row_offset = 2
+        row_offset = 3
         row, col = positions[i] .+ (row_offset, 0)
         d = get(panel_data, (site.obs_prefix, year), nothing)
 
@@ -681,10 +681,10 @@ function plot_combined_Tbot_Tdavg()
     legend_labels_tdavg = ["Observed", "LES (coare_wind)", "LES (direct)",
                            "k-ε (coare_wind)", "k-ε (direct)",
                            "Analytical (coare_wind)", "Analytical (direct)"]
-    Legend(fig[4, 4], legend_elems_tdavg, legend_labels_tdavg;
+    Legend(fig[5, 4], legend_elems_tdavg, legend_labels_tdavg;
            tellwidth = false, labelsize = 11, framevisible = false, padding = (0, 0, 0, 0))
 
-    Label(fig[2, 1:4], "T_davg"; color = :steelblue4, font = :bold, fontsize = 14,
+    Label(fig[3, 1:4], L"\mathbf{T_{davg}}"; color = :steelblue4, font = :bold, fontsize = 16,
           halign = :center, padding = (0, 0, 0, 2))
 
     colgap!(fig.layout, 12)
