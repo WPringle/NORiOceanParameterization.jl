@@ -660,6 +660,11 @@ function run_simulation(model, closure_name, OUTPUT_PATH)
                 ∂z_b, grid, model.buoyancy, model.tracers)
     N²bar = Field(Average(N²_op, dims = (1, 2)))
 
+    # Closure-internal turbulent diffusivities (momentum, tracer/heat) — for
+    # comparing parameterized mixing strength against LES-resolved fluxes.
+    κubar = Field(Average(model.diffusivity_fields.κu, dims = (1, 2)))
+    κcbar = Field(Average(model.diffusivity_fields.κc, dims = (1, 2)))
+
     # ── Monin–Obukhov length timeseries ──────────────────────────────────────
     # Uses the NON-SOLAR + LW_up surface flux (the actual top flux BC) as the
     # surface buoyancy flux driver — the penetrative SW enters as a volumetric
@@ -694,7 +699,7 @@ function run_simulation(model, closure_name, OUTPUT_PATH)
     mkpath(OUTPUT_PATH)
     filename = joinpath(OUTPUT_PATH, "$(closure_name)$(SRC_TAG)$(UV_TAG)$(EOS_TAG)_winter$(winter_year).jld2")
     simulation.output_writers[:jld2] = JLD2OutputWriter(model,
-        (; ubar, vbar, Tbar, Ribar, N²bar),
+        (; ubar, vbar, Tbar, Ribar, N²bar, κubar, κcbar),
         filename           = filename,
         schedule           = AveragedTimeInterval(1hours),
         overwrite_existing = true)

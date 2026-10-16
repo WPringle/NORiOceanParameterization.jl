@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N lake_superior_southern_mooring_GLEN_forced
-#PBS -A HSOFS_Ensemble
+#PBS -A SpaceCoast_RESCUE
 #PBS -q compute
 #PBS -l select=1:ncpus=128
 #PBS -l walltime=1:00:00
@@ -32,15 +32,15 @@ echo "============================================"
 # at once (e.g. 5 years × 4 closures × 2 sources = 40) overcommits the node's
 # memory, which makes JLD2's memory-mapped writes fail with SIGBUS (bus error)
 # and corrupt output files.  Cap concurrency so peak RAM stays well under 128 GB.
-SCRIPT="experiments/lake_superior_southern_mooring_GLEN_forced.jl"
+SCRIPT="TURB_experiments/lake_superior_southern_mooring_GLEN_forced.jl"
 MAX_JOBS=32    # verified safe (8 × ~2.5 GB ≈ 20 GB peak); raise cautiously vs 128 GB node
 
 # Forcing source(s): "direct" (measured EC fluxes) and/or "coare_wind"
 # (momentum/SHF/LHF re-derived from wind via the COARE bulk algorithm).
 STATUS=0
 for year in 2010 2011; do
-    for closure in kepsilon kepsilon_Rist035 CATKE; do # CATKE_highRi; do
-    #for closure in kepsilon; do
+    for closure in kepsilon CATKE; do
+    #for closure in kepsilon kepsilon_Rist035 CATKE; do # CATKE_highRi; do
         for source in direct coare_wind; do
         #for source in direct; do
             # Throttle: wait for a slot to free up before launching the next job.

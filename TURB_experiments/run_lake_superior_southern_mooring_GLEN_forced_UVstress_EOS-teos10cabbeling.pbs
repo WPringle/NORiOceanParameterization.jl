@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N lake_superior_southern_mooring_GLEN_forced_UVstress_EOSteos10cabbeling
-#PBS -A HSOFS_Ensemble
+#PBS -A SpaceCoast_RESCUE
 #PBS -q compute
 #PBS -l select=1:ncpus=128
 #PBS -l walltime=1:00:00
@@ -35,13 +35,14 @@ echo "============================================"
 # Each Julia/Oceananigans process needs ~2.5 GB RAM; MAX_JOBS caps concurrency so
 # peak RAM stays well under 128 GB (2 years × 2 closures × 2 sources = 8 jobs here,
 # so this batch launches all at once regardless).
-SCRIPT="experiments/lake_superior_southern_mooring_GLEN_forced_UVstress_EOS-cabbeling.jl"
+SCRIPT="TURB_experiments/lake_superior_southern_mooring_GLEN_forced_UVstress_EOS-cabbeling.jl"
 EOS="teos10cabbeling"
 MAX_JOBS=32
 
 STATUS=0
 for year in 2010 2011; do
-    for closure in kepsilon kepsilon_Rist035; do
+    for closure in kepsilon CATKE; do
+    #for closure in kepsilon kepsilon_Rist035; do
         for source in direct coare_wind; do
             # Throttle: wait for a slot to free up before launching the next job.
             while (( $(jobs -rp | wc -l) >= MAX_JOBS )); do

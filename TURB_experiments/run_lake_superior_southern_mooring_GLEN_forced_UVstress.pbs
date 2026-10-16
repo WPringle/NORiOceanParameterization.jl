@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N lake_superior_southern_mooring_GLEN_forced_UVstress
-#PBS -A HSOFS_Ensemble
+#PBS -A SpaceCoast_RESCUE
 #PBS -q compute
 #PBS -l select=1:ncpus=128
 #PBS -l walltime=1:00:00
@@ -34,7 +34,7 @@ echo "============================================"
 # overcommits the node's memory, which makes JLD2's memory-mapped writes fail with
 # SIGBUS (bus error) and corrupt output files.  Cap concurrency so peak RAM stays
 # well under 128 GB.
-SCRIPT="experiments/lake_superior_southern_mooring_GLEN_forced_UVstress.jl"
+SCRIPT="TURB_experiments/lake_superior_southern_mooring_GLEN_forced_UVstress.jl"
 MAX_JOBS=32    # verified safe (well under 32 × 2.5 GB ≈ 80 GB peak); lower if you see SIGBUS / corrupt files
 
 # Winter year(s): only 2010 and 2011 are in the southern mooring start-date CSV
@@ -47,10 +47,11 @@ MAX_JOBS=32    # verified safe (well under 32 × 2.5 GB ≈ 80 GB peak); lower i
 # temperature; requires the "_wSM" gap-filled input file, see the .jl script).
 STATUS=0
 for year in 2010 2011; do
+    for closure in kepsilon CATKE; do
     #for closure in kepsilon kepsilon_Rist035 CATKE; do # CATKE_highRi; do
-    for closure in kepsilon; do
+        for source in direct coare_wind; do
         #for source in direct coare_wind coare_wind_southern; do
-        for source in coare_wind_southern; do
+        #for source in coare_wind_southern; do
             # Throttle: wait for a slot to free up before launching the next job.
             while (( $(jobs -rp | wc -l) >= MAX_JOBS )); do
                 wait -n || STATUS=$?

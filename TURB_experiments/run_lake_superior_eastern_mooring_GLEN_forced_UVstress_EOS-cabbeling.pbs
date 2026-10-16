@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N lake_superior_eastern_mooring_GLEN_forced_UVstress_EOScabbeling
-#PBS -A HSOFS_Ensemble
+#PBS -A SpaceCoast_RESCUE
 #PBS -q compute
 #PBS -l select=1:ncpus=128
 #PBS -l walltime=1:00:00
@@ -34,7 +34,7 @@ echo "============================================"
 # overcommits the node's memory, which makes JLD2's memory-mapped writes fail with
 # SIGBUS (bus error) and corrupt output files.  Cap concurrency so peak RAM stays
 # well under 128 GB.
-SCRIPT="experiments/lake_superior_eastern_mooring_GLEN_forced_UVstress_EOS-cabbeling.jl"
+SCRIPT="TURB_experiments/lake_superior_eastern_mooring_GLEN_forced_UVstress_EOS-cabbeling.jl"
 MAX_JOBS=32    # ~32 × 2.5 GB ≈ 80 GB peak; lower if you see SIGBUS / corrupt files
 
 # Forcing source(s): "direct" (measured EC fluxes) and/or "coare_wind"
@@ -46,9 +46,9 @@ STATUS=0
 for year in 2009 2010 2011 2014 2015; do
 #for year in 2015; do
 #for year in 2009 2010 2011 2014; do
-    #for closure in kepsilon CATKE; do
+    for closure in kepsilon CATKE; do
     #for closure in kepsilon kepsilon_Rist035 CATKE CATKE_highRi; do
-    for closure in kepsilon; do
+    #for closure in kepsilon; do
         for source in direct coare_wind; do
         #for source in direct; do
             #for eos in cabbeling cabbelingthermobaric teos10cabbeling; do
